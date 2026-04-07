@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import type { JSX } from 'solid-js'
 import './App.css'
 
@@ -725,28 +725,28 @@ function App() {
           class="canvas-world"
           style={`transform: translate3d(${view().x}px, ${view().y}px, 0) scale(${view().zoom});`}
         >
-          <For each={items()}>
+          <Index each={items()}>
             {(item) => (
               <div
-                class={`canvas-item item-${item.type}${selectedId() === item.id ? ' is-selected' : ''}${
-                  editingId() === item.id ? ' is-editing' : ''
+                class={`canvas-item item-${item().type}${selectedId() === item().id ? ' is-selected' : ''}${
+                  editingId() === item().id ? ' is-editing' : ''
                 }`}
-                style={`transform: translate3d(${item.x}px, ${item.y}px, 0); width: ${item.w}px; height: ${item.h}px; --item-color: ${item.color};`}
-                onPointerDown={(event) => handleItemPointerDown(event, item)}
+                style={`transform: translate3d(${item().x}px, ${item().y}px, 0); width: ${item().w}px; height: ${item().h}px; --item-color: ${item().color};`}
+                onPointerDown={(event) => handleItemPointerDown(event, item())}
                 onDblClick={(event) => {
                   event.stopPropagation()
-                  setSelectedId(item.id)
-                  setEditingId(item.id)
+                  setSelectedId(item().id)
+                  setEditingId(item().id)
                 }}
               >
-                <Show when={item.type === 'diamond'}>
+                <Show when={item().type === 'diamond'}>
                   <div class="diamond-fill" />
                 </Show>
 
                 <div class="item-content">
                   <Show
-                    when={editingId() === item.id}
-                    fallback={<div class="formatted-text">{renderFormattedText(item.text)}</div>}
+                    when={editingId() === item().id}
+                    fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
                   >
                     <textarea
                       ref={(element) => {
@@ -756,27 +756,27 @@ function App() {
                         })
                       }}
                       class="note-editor"
-                      value={item.text}
+                      value={item().text}
                       spellcheck={false}
-                      onInput={(event) => updateItem(item.id, { text: event.currentTarget.value })}
-                      onKeyDown={(event) => handleEditorKeyDown(event, item)}
+                      onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
+                      onKeyDown={(event) => handleEditorKeyDown(event, item())}
                       onPointerDown={(event) => event.stopPropagation()}
-                      onBlur={() => setEditingId((current) => (current === item.id ? null : current))}
+                      onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
                     />
                   </Show>
                 </div>
 
-                <Show when={selectedId() === item.id && editingId() !== item.id}>
+                <Show when={selectedId() === item().id && editingId() !== item().id}>
                   <button
                     class="resize-handle"
                     type="button"
                     aria-label="Resize item"
-                    onPointerDown={(event) => handleResizePointerDown(event, item)}
+                    onPointerDown={(event) => handleResizePointerDown(event, item())}
                   />
                 </Show>
               </div>
             )}
-          </For>
+          </Index>
         </div>
       </div>
     </main>
