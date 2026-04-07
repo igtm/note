@@ -131,6 +131,11 @@ const boxesIntersect = (a: SelectionBox, b: SelectionBox) =>
 const boxContainsPoint = (box: SelectionBox, point: Point) =>
   point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
 
+const verticalPadding = (element: HTMLElement) => {
+  const style = getComputedStyle(element)
+  return Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+}
+
 const defaultView = (): Viewport => ({
   x: typeof window === 'undefined' ? 180 : Math.max(80, window.innerWidth * 0.22),
   y: 120,
@@ -413,6 +418,8 @@ function App() {
   let pollTimer: number | undefined
   let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
+  const itemContentRefs = new Map<string, HTMLDivElement>()
+  const editorRefs = new Map<string, HTMLTextAreaElement>()
 
   const selectedItems = createMemo(() => {
     const ids = new Set(selectedIds())
@@ -480,6 +487,32 @@ function App() {
 
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }
+
+  const growItemHeight = (id: string, height: number) => {
+    setItems((current) =>
+      current.map((item) => {
+        if (item.id !== id || height <= item.h + 2) return item
+        return { ...item, h: Math.ceil(height) }
+      }),
+    )
+  }
+
+  const fitItemHeight = (id: string) => {
+    const editor = editorRefs.get(id)
+    if (editor) {
+      const content = itemContentRefs.get(id)
+      const padding = content ? verticalPadding(content) : 32
+      growItemHeight(id, editor.scrollHeight + padding + 8)
+      return
+    }
+
+    const content = itemContentRefs.get(id)
+    if (content) growItemHeight(id, content.scrollHeight + 4)
+  }
+
+  const scheduleFitItemHeight = (id: string) => {
+    requestAnimationFrame(() => fitItemHeight(id))
   }
 
   const updateSelectedItems = (patch: Partial<CanvasItem>) => {
@@ -953,6 +986,7 @@ function App() {
       const nextText = `${value.slice(0, blockStart)}${updatedBlock}${value.slice(blockEnd)}`
 
       updateItem(item.id, { text: nextText })
+      scheduleFitItemHeight(item.id)
       requestAnimationFrame(() => {
         if (selectionStart === selectionEnd) {
           const cursorDelta = updatedLines[0].length - lines[0].length
@@ -981,6 +1015,7 @@ function App() {
       event.preventDefault()
       const nextText = `${value.slice(0, lineStart)}${value.slice(cursor)}`
       updateItem(item.id, { text: nextText })
+      scheduleFitItemHeight(item.id)
       requestAnimationFrame(() => {
         editor.selectionStart = lineStart
         editor.selectionEnd = lineStart
@@ -1003,6 +1038,7 @@ function App() {
     const inserted = `\n${nextPrefix}`
     const nextText = `${value.slice(0, cursor)}${inserted}${value.slice(cursor)}`
     updateItem(item.id, { text: nextText })
+    scheduleFitItemHeight(item.id)
     requestAnimationFrame(() => {
       const nextCursor = cursor + inserted.length
       editor.selectionStart = nextCursor
@@ -1178,26 +1214,41 @@ function App() {
                   <div class="diamond-fill" />
                 </Show>
 
-                <div class={editingId() === item().id ? 'item-content is-editing-content' : 'item-content'}>
+                <div
+                  ref={(element) => {
+                    itemContentRefs.set(item().id, element)
+                    scheduleFitItemHeight(item().id)
+                  }}
+                  class={editingId() === item().id ? 'item-content is-editing-content' : 'item-content'}
+                >
                   <Show
                     when={editingId() === item().id}
                     fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
                   >
                     <textarea
                       ref={(element) => {
+                        editorRefs.set(item().id, element)
                         requestAnimationFrame(() => {
                           element.focus()
                           element.setSelectionRange(element.value.length, element.value.length)
+                          fitItemHeight(item().id)
                         })
                       }}
                       class="note-editor"
                       aria-label="Nested bullet editor"
                       value={item().text}
                       spellcheck={false}
-                      onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
+                      onInput={(event) => {
+                        updateItem(item().id, { text: event.currentTarget.value })
+                        scheduleFitItemHeight(item().id)
+                      }}
                       onKeyDown={(event) => handleEditorKeyDown(event, item())}
                       onPointerDown={(event) => event.stopPropagation()}
-                      onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
+                      onBlur={() => {
+                        editorRefs.delete(item().id)
+                        scheduleFitItemHeight(item().id)
+                        setEditingId((current) => (current === item().id ? null : current))
+                      }}
                     />
                   </Show>
                 </div>
