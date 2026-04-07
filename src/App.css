@@ -11,7 +11,7 @@
 .canvas-stage {
   position: fixed;
   inset: 0;
-  cursor: grab;
+  cursor: default;
   touch-action: none;
   background-color: #f7f0df;
   background-image:
@@ -30,6 +30,18 @@
 
 .canvas-stage.is-panning {
   cursor: grabbing;
+}
+
+.canvas-stage.tool-pan {
+  cursor: grab;
+}
+
+.canvas-stage.tool-pan .canvas-item {
+  cursor: grab;
+}
+
+.canvas-stage.tool-selection.is-selecting {
+  cursor: crosshair;
 }
 
 .canvas-world {
@@ -128,6 +140,22 @@
   gap: 8px;
   padding: 8px 11px 8px 13px;
   font-size: 15px;
+}
+
+.tool-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.tool-icon path:first-child:last-child,
+.tool-icon rect,
+.tool-icon ellipse {
+  fill: rgba(255, 255, 255, 0.22);
 }
 
 .tool-button small {
@@ -233,7 +261,7 @@
   position: absolute;
   z-index: 1;
   color: var(--ink);
-  cursor: grab;
+  cursor: move;
   user-select: none;
   transform-origin: 0 0;
   transition:
@@ -242,7 +270,7 @@
 }
 
 .canvas-item:active {
-  cursor: grabbing;
+  cursor: move;
 }
 
 .canvas-item.is-selected {
@@ -256,6 +284,26 @@
 
 .canvas-item.is-editing:active {
   cursor: text;
+}
+
+.area-selection,
+.multi-selection-bounds {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 18px;
+}
+
+.area-selection {
+  z-index: 40;
+  border: 1.6px dashed rgba(255, 130, 82, 0.92);
+  background: rgba(255, 189, 145, 0.16);
+  box-shadow: 0 0 0 5px rgba(255, 245, 225, 0.24);
+}
+
+.multi-selection-bounds {
+  z-index: 35;
+  border: 1.7px dashed rgba(98, 70, 31, 0.5);
+  box-shadow: 0 0 0 7px rgba(255, 244, 200, 0.24);
 }
 
 .item-content {

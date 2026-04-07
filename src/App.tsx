@@ -3,7 +3,7 @@ import type { JSX } from 'solid-js'
 import './App.css'
 
 type ItemType = 'text' | 'note' | 'rect' | 'ellipse' | 'diamond'
-type Tool = 'select' | ItemType
+type Tool = 'selection' | 'pan' | ItemType
 
 type CanvasItem = {
   id: string
@@ -32,6 +32,17 @@ type Point = {
   y: number
 }
 
+type SelectionBox = Point & {
+  w: number
+  h: number
+}
+
+type ItemOrigin = {
+  id: string
+  x: number
+  y: number
+}
+
 type Interaction =
   | {
       kind: 'pan'
@@ -44,10 +55,9 @@ type Interaction =
   | {
       kind: 'drag'
       pointerId: number
-      id: string
+      ids: string[]
       startWorld: Point
-      originX: number
-      originY: number
+      origins: ItemOrigin[]
     }
   | {
       kind: 'resize'
@@ -57,11 +67,20 @@ type Interaction =
       originW: number
       originH: number
     }
+  | {
+      kind: 'selectArea'
+      pointerId: number
+      startWorld: Point
+      currentWorld: Point
+      additive: boolean
+      previousIds: string[]
+    }
 
 const STORAGE_KEY = 'pencil-free-note:v1'
 
 const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
-  { id: 'select', label: 'Select', shortcut: 'V' },
+  { id: 'selection', label: 'Selection', shortcut: 'V' },
+  { id: 'pan', label: 'Pan', shortcut: 'H' },
   { id: 'text', label: 'Text', shortcut: 'T' },
   { id: 'note', label: 'Note', shortcut: 'N' },
   { id: 'rect', label: 'Rect', shortcut: 'R' },
@@ -74,6 +93,28 @@ const PALETTE = ['#fff7c7', '#ffd8df', '#d7f2ff', '#d8f5dd', '#eadcff', '#ffe1bd
 const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+const isItemTool = (value: Tool): value is ItemType =>
+  ['text', 'note', 'rect', 'ellipse', 'diamond'].includes(value)
+
+const unique = (values: string[]) => [...new Set(values)]
+
+const normalizeBox = (start: Point, end: Point): SelectionBox => ({
+  x: Math.min(start.x, end.x),
+  y: Math.min(start.y, end.y),
+  w: Math.abs(start.x - end.x),
+  h: Math.abs(start.y - end.y),
+})
+
+const itemBox = (item: CanvasItem): SelectionBox => ({
+  x: item.x,
+  y: item.y,
+  w: item.w,
+  h: item.h,
+})
+
+const boxesIntersect = (a: SelectionBox, b: SelectionBox) =>
+  a.x <= b.x + b.w && a.x + a.w >= b.x && a.y <= b.y + b.h && a.y + a.h >= b.y
 
 const defaultView = (): Viewport => ({
   x: typeof window === 'undefined' ? 180 : Math.max(80, window.innerWidth * 0.22),
@@ -100,7 +141,7 @@ const defaultItems = (): CanvasItem[] => [
     w: 320,
     h: 190,
     color: '#ffffff',
-    text: '## 使い方\n空いている場所をドラッグ: 移動\nCtrl + ホイール: 拡大縮小\n図形ツールを選んでクリック: 追加\nDelete: 選択中を削除',
+    text: '## 使い方\nV: 範囲選択と移動\nH: キャンバス移動\nCtrl + ホイール: 拡大縮小\n図形ツールを選んでクリック: 追加\nDelete: 選択中を削除',
   },
   {
     id: createId(),
@@ -305,19 +346,102 @@ const typeLabel = (type: ItemType) =>
     diamond: 'Diamond',
   })[type]
 
+const ToolIcon = (props: { tool: Tool }) => {
+  if (props.tool === 'selection') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 3.5 18.5 12l-6.2 1.1 3.1 6.4-3.1 1.5-3-6.3-4.3 4.6Z" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'pan') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8.2 11.4V5.8a1.4 1.4 0 0 1 2.8 0v5.1" />
+        <path d="M11 10.8V4.6a1.4 1.4 0 0 1 2.8 0v6" />
+        <path d="M13.8 10.7V6.2a1.4 1.4 0 0 1 2.8 0v5.3" />
+        <path d="M16.6 11.6V8.9a1.4 1.4 0 0 1 2.8 0v5.3c0 4-2.4 6.5-6.5 6.5h-1.3c-2.2 0-3.6-.8-5-2.5l-2.4-2.9a1.5 1.5 0 0 1 2.2-2l1.8 1.8" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'ellipse') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <ellipse cx="12" cy="12" rx="7.5" ry="5.8" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'diamond') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m12 4.2 7.8 7.8-7.8 7.8L4.2 12Z" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'rect' || props.tool === 'note') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="6" width="14" height="12" rx={props.tool === 'note' ? '3' : '1.5'} />
+      </svg>
+    )
+  }
+
+  return (
+    <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 18h12" />
+      <path d="M9 6h6" />
+      <path d="M12 6v12" />
+    </svg>
+  )
+}
+
 function App() {
   const saved = loadNotebook()
   const [items, setItems] = createSignal<CanvasItem[]>(saved.items)
   const [view, setView] = createSignal<Viewport>(saved.view)
-  const [tool, setTool] = createSignal<Tool>('select')
-  const [selectedId, setSelectedId] = createSignal<string | null>(items()[0]?.id ?? null)
+  const [tool, setTool] = createSignal<Tool>('selection')
+  const [selectedIds, setSelectedIds] = createSignal<string[]>(items()[0] ? [items()[0].id] : [])
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [interaction, setInteraction] = createSignal<Interaction | null>(null)
   const [saveState, setSaveState] = createSignal('autosaved locally')
   let stageRef!: HTMLDivElement
 
-  const selectedItem = createMemo(() => items().find((item) => item.id === selectedId()))
+  const selectedItems = createMemo(() => {
+    const ids = new Set(selectedIds())
+    return items().filter((item) => ids.has(item.id))
+  })
+  const selectedItem = createMemo(() => (selectedItems().length === 1 ? selectedItems()[0] : undefined))
+  const selectedCount = createMemo(() => selectedItems().length)
   const zoomLabel = createMemo(() => `${Math.round(view().zoom * 100)}%`)
+  const marquee = createMemo(() => {
+    const active = interaction()
+    return active?.kind === 'selectArea' ? normalizeBox(active.startWorld, active.currentWorld) : null
+  })
+  const selectedBounds = createMemo(() => {
+    const selection = selectedItems()
+    if (selection.length < 2) return null
+
+    const minX = Math.min(...selection.map((item) => item.x))
+    const minY = Math.min(...selection.map((item) => item.y))
+    const maxX = Math.max(...selection.map((item) => item.x + item.w))
+    const maxY = Math.max(...selection.map((item) => item.y + item.h))
+
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  })
+  const stageClass = createMemo(() =>
+    [
+      'canvas-stage',
+      tool() === 'pan' ? 'tool-pan' : 'tool-selection',
+      interaction()?.kind === 'pan' ? 'is-panning' : '',
+      interaction()?.kind === 'selectArea' ? 'is-selecting' : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  )
 
   createEffect(() => {
     try {
@@ -328,8 +452,38 @@ function App() {
     }
   })
 
+  createEffect(() => {
+    const ids = new Set(items().map((item) => item.id))
+    const filteredIds = selectedIds().filter((id) => ids.has(id))
+    if (filteredIds.length !== selectedIds().length) setSelectedIds(filteredIds)
+  })
+
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }
+
+  const updateSelectedItems = (patch: Partial<CanvasItem>) => {
+    const ids = new Set(selectedIds())
+    setItems((current) => current.map((item) => (ids.has(item.id) ? { ...item, ...patch } : item)))
+  }
+
+  const selectItemsInBox = (box: SelectionBox, previousIds: string[]) => {
+    const hitIds = items()
+      .filter((item) => boxesIntersect(box, itemBox(item)))
+      .map((item) => item.id)
+
+    setSelectedIds(unique([...previousIds, ...hitIds]))
+  }
+
+  const startPan = (event: PointerEvent) => {
+    setInteraction({
+      kind: 'pan',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: view().x,
+      originY: view().y,
+    })
   }
 
   const screenToWorld = (clientX: number, clientY: number): Point => {
@@ -393,31 +547,32 @@ function App() {
   const placeItem = (nextTool: ItemType, point: Point) => {
     const item = createItem(nextTool, point)
     setItems((current) => [...current, item])
-    setSelectedId(item.id)
-    setTool('select')
+    setSelectedIds([item.id])
+    setTool('selection')
     if (nextTool === 'text' || nextTool === 'note') setEditingId(item.id)
   }
 
   const deleteSelected = () => {
-    const id = selectedId()
-    if (!id) return
-    setItems((current) => current.filter((item) => item.id !== id))
-    setSelectedId(null)
+    const ids = new Set(selectedIds())
+    if (!ids.size) return
+    setItems((current) => current.filter((item) => !ids.has(item.id)))
+    setSelectedIds([])
     setEditingId(null)
   }
 
   const duplicateSelected = () => {
-    const item = selectedItem()
-    if (!item) return
+    const selection = selectedItems()
+    if (!selection.length) return
 
-    const duplicated = {
+    const duplicated = selection.map((item) => ({
       ...item,
       id: createId(),
       x: item.x + 32,
       y: item.y + 32,
-    }
-    setItems((current) => [...current, duplicated])
-    setSelectedId(duplicated.id)
+    }))
+
+    setItems((current) => [...current, ...duplicated])
+    setSelectedIds(duplicated.map((item) => item.id))
     setEditingId(null)
   }
 
@@ -426,27 +581,37 @@ function App() {
   const clearBoard = () => {
     if (!confirm('キャンバス上のノートをすべて削除しますか？')) return
     setItems([])
-    setSelectedId(null)
+    setSelectedIds([])
     setEditingId(null)
   }
 
   const handleStagePointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     if (event.button !== 0 || isEditableTarget(event.target)) return
 
-    if (tool() !== 'select') {
-      placeItem(tool() as ItemType, screenToWorld(event.clientX, event.clientY))
+    const currentTool = tool()
+
+    if (isItemTool(currentTool)) {
+      placeItem(currentTool, screenToWorld(event.clientX, event.clientY))
       return
     }
 
-    setSelectedId(null)
+    if (currentTool === 'pan') {
+      startPan(event)
+      return
+    }
+
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey
+    const startWorld = screenToWorld(event.clientX, event.clientY)
+
     setEditingId(null)
+    if (!additive) setSelectedIds([])
     setInteraction({
-      kind: 'pan',
+      kind: 'selectArea',
       pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: view().x,
-      originY: view().y,
+      startWorld,
+      currentWorld: startWorld,
+      additive,
+      previousIds: additive ? selectedIds() : [],
     })
   }
 
@@ -456,16 +621,37 @@ function App() {
   ) => {
     if (event.button !== 0 || editingId() === item.id || isEditableTarget(event.target)) return
 
+    const currentTool = tool()
+    if (currentTool === 'pan') {
+      event.stopPropagation()
+      setEditingId(null)
+      startPan(event)
+      return
+    }
+
+    if (currentTool !== 'selection') return
+
     event.stopPropagation()
-    setSelectedId(item.id)
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey
+    const currentIds = selectedIds()
+    const nextIds = currentIds.includes(item.id)
+      ? currentIds
+      : additive
+        ? [...currentIds, item.id]
+        : [item.id]
+    const dragIds = unique(nextIds)
+    const dragSet = new Set(dragIds)
+
+    setSelectedIds(dragIds)
     setEditingId((current) => (current === item.id ? current : null))
     setInteraction({
       kind: 'drag',
       pointerId: event.pointerId,
-      id: item.id,
+      ids: dragIds,
       startWorld: screenToWorld(event.clientX, event.clientY),
-      originX: item.x,
-      originY: item.y,
+      origins: items()
+        .filter((entry) => dragSet.has(entry.id))
+        .map((entry) => ({ id: entry.id, x: entry.x, y: entry.y })),
     })
   }
 
@@ -474,7 +660,7 @@ function App() {
     item: CanvasItem,
   ) => {
     event.stopPropagation()
-    setSelectedId(item.id)
+    setSelectedIds([item.id])
     setInteraction({
       kind: 'resize',
       pointerId: event.pointerId,
@@ -501,10 +687,27 @@ function App() {
     const world = screenToWorld(event.clientX, event.clientY)
 
     if (active.kind === 'drag') {
-      updateItem(active.id, {
-        x: Math.round(active.originX + world.x - active.startWorld.x),
-        y: Math.round(active.originY + world.y - active.startWorld.y),
-      })
+      const originMap = new Map(active.origins.map((origin) => [origin.id, origin]))
+      setItems((current) =>
+        current.map((item) => {
+          const origin = originMap.get(item.id)
+          if (!origin) return item
+
+          return {
+            ...item,
+            x: Math.round(origin.x + world.x - active.startWorld.x),
+            y: Math.round(origin.y + world.y - active.startWorld.y),
+          }
+        }),
+      )
+      return
+    }
+
+    if (active.kind === 'selectArea') {
+      const currentWorld = screenToWorld(event.clientX, event.clientY)
+      const nextInteraction = { ...active, currentWorld }
+      setInteraction(nextInteraction)
+      selectItemsInBox(normalizeBox(active.startWorld, currentWorld), active.additive ? active.previousIds : [])
       return
     }
 
@@ -516,7 +719,16 @@ function App() {
 
   const handlePointerUp = (event: PointerEvent) => {
     const active = interaction()
-    if (active?.pointerId === event.pointerId) setInteraction(null)
+    if (active?.pointerId !== event.pointerId) return
+
+    if (active.kind === 'selectArea') {
+      const box = normalizeBox(active.startWorld, active.currentWorld)
+      if (box.w < 4 && box.h < 4) {
+        setSelectedIds(active.additive ? active.previousIds : [])
+      }
+    }
+
+    setInteraction(null)
   }
 
   const handleWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
@@ -542,8 +754,8 @@ function App() {
     }
 
     if (event.key === 'Escape') {
-      setTool('select')
-      setSelectedId(null)
+      setTool('selection')
+      setSelectedIds([])
       setEditingId(null)
       return
     }
@@ -653,6 +865,7 @@ function App() {
                 title={`${entry.label} (${entry.shortcut})`}
                 onClick={() => setTool(entry.id)}
               >
+                <ToolIcon tool={entry.id} />
                 <span>{entry.label}</span>
                 <small>{entry.shortcut}</small>
               </button>
@@ -661,10 +874,10 @@ function App() {
         </div>
 
         <div class="toolbar-actions">
-          <button type="button" onClick={duplicateSelected} disabled={!selectedId()}>
+          <button type="button" onClick={duplicateSelected} disabled={selectedCount() === 0}>
             Duplicate
           </button>
-          <button type="button" onClick={deleteSelected} disabled={!selectedId()}>
+          <button type="button" onClick={deleteSelected} disabled={selectedCount() === 0}>
             Delete
           </button>
         </div>
@@ -672,30 +885,30 @@ function App() {
 
       <section class="inspector" aria-label="Selected item">
         <Show
-          when={selectedItem()}
+          when={selectedCount() > 0}
           fallback={
             <>
               <p class="eyebrow">Format hints</p>
               <h1>Markdown-ish</h1>
-              <p class="hint-copy">`- `, `1. `, `# `, `- [ ]`, `**bold**`, `*italic*`, `&gt; quote`</p>
+              <p class="hint-copy">
+                V: selection, H: pan. Drag empty space in selection mode to select an area.
+              </p>
             </>
           }
         >
-          {(item) => (
-            <>
-              <p class="eyebrow">Selected</p>
-              <h1>{typeLabel(item().type)}</h1>
-              <label class="color-control">
-                <span>Color</span>
-                <input
-                  type="color"
-                  value={item().color}
-                  onInput={(event) => updateItem(item().id, { color: event.currentTarget.value })}
-                />
-              </label>
-              <p class="hint-copy">Double click to edit text. Drag the corner dot to resize.</p>
-            </>
-          )}
+          <>
+            <p class="eyebrow">Selected</p>
+            <h1>{selectedItem() ? typeLabel(selectedItem()!.type) : `${selectedCount()} items`}</h1>
+            <label class="color-control">
+              <span>Color</span>
+              <input
+                type="color"
+                value={selectedItems()[0]?.color ?? '#fff7c7'}
+                onInput={(event) => updateSelectedItems({ color: event.currentTarget.value })}
+              />
+            </label>
+            <p class="hint-copy">Drag selected items to move together. Resize is available for one item.</p>
+          </>
         </Show>
       </section>
 
@@ -716,7 +929,7 @@ function App() {
       </section>
 
       <div
-        class={interaction()?.kind === 'pan' ? 'canvas-stage is-panning' : 'canvas-stage'}
+        class={stageClass()}
         ref={stageRef}
         onPointerDown={handleStagePointerDown}
         onWheel={handleWheel}
@@ -728,14 +941,14 @@ function App() {
           <Index each={items()}>
             {(item) => (
               <div
-                class={`canvas-item item-${item().type}${selectedId() === item().id ? ' is-selected' : ''}${
-                  editingId() === item().id ? ' is-editing' : ''
-                }`}
+                class={`canvas-item item-${item().type}${
+                  selectedIds().includes(item().id) ? ' is-selected' : ''
+                }${editingId() === item().id ? ' is-editing' : ''}`}
                 style={`transform: translate3d(${item().x}px, ${item().y}px, 0); width: ${item().w}px; height: ${item().h}px; --item-color: ${item().color};`}
                 onPointerDown={(event) => handleItemPointerDown(event, item())}
                 onDblClick={(event) => {
                   event.stopPropagation()
-                  setSelectedId(item().id)
+                  setSelectedIds([item().id])
                   setEditingId(item().id)
                 }}
               >
@@ -766,7 +979,7 @@ function App() {
                   </Show>
                 </div>
 
-                <Show when={selectedId() === item().id && editingId() !== item().id}>
+                <Show when={selectedIds().length === 1 && selectedIds()[0] === item().id && editingId() !== item().id}>
                   <button
                     class="resize-handle"
                     type="button"
@@ -777,6 +990,22 @@ function App() {
               </div>
             )}
           </Index>
+          <Show when={selectedBounds()}>
+            {(box) => (
+              <div
+                class="multi-selection-bounds"
+                style={`transform: translate3d(${box().x}px, ${box().y}px, 0); width: ${box().w}px; height: ${box().h}px;`}
+              />
+            )}
+          </Show>
+          <Show when={marquee()}>
+            {(box) => (
+              <div
+                class="area-selection"
+                style={`transform: translate3d(${box().x}px, ${box().y}px, 0); width: ${box().w}px; height: ${box().h}px;`}
+              />
+            )}
+          </Show>
         </div>
       </div>
     </main>
