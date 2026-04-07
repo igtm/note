@@ -1202,7 +1202,7 @@ function App() {
                 class={`canvas-item item-${item().type}${
                   selectedIds().includes(item().id) ? ' is-selected' : ''
                 }${editingId() === item().id ? ' is-editing' : ''}`}
-                style={`transform: translate3d(${item().x}px, ${item().y}px, 0); width: ${item().w}px; height: ${item().h}px; --item-color: ${item().color};`}
+                style={`transform: translate3d(${item().x}px, ${item().y}px, 0); width: ${item().w}px; min-height: ${item().h}px; height: ${editingId() === item().id ? 'auto' : `${item().h}px`}; --item-color: ${item().color};`}
                 onPointerDown={(event) => handleItemPointerDown(event, item())}
                 onDblClick={(event) => {
                   event.stopPropagation()

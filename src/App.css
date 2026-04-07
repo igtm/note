@@ -540,8 +540,11 @@ p + .nested-list {
 }
 
 .note-editor {
+  display: block;
+  field-sizing: content;
   width: 100%;
-  height: 100%;
+  height: auto;
+  min-height: 100%;
   padding: 0;
   resize: none;
   border: 0;
@@ -555,6 +558,8 @@ p + .nested-list {
 }
 
 .item-content.is-editing-content {
+  height: auto;
+  min-height: 100%;
   padding: 16px;
 }
 
