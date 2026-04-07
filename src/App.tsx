@@ -128,6 +128,9 @@ const itemBox = (item: CanvasItem): SelectionBox => ({
 const boxesIntersect = (a: SelectionBox, b: SelectionBox) =>
   a.x <= b.x + b.w && a.x + a.w >= b.x && a.y <= b.y + b.h && a.y + a.h >= b.y
 
+const boxContainsPoint = (box: SelectionBox, point: Point) =>
+  point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
+
 const defaultView = (): Viewport => ({
   x: typeof window === 'undefined' ? 180 : Math.max(80, window.innerWidth * 0.22),
   y: 120,
@@ -554,6 +557,21 @@ function App() {
     })
   }
 
+  const startSelectedItemsDrag = (event: PointerEvent, ids: string[], startWorld: Point) => {
+    const dragIds = unique(ids)
+    const dragSet = new Set(dragIds)
+
+    setInteraction({
+      kind: 'drag',
+      pointerId: event.pointerId,
+      ids: dragIds,
+      startWorld,
+      origins: items()
+        .filter((entry) => dragSet.has(entry.id))
+        .map((entry) => ({ id: entry.id, x: entry.x, y: entry.y })),
+    })
+  }
+
   const clearShareTimers = () => {
     window.clearInterval(pollTimer)
     window.clearTimeout(pushTimer)
@@ -773,6 +791,13 @@ function App() {
 
     const additive = event.shiftKey || event.metaKey || event.ctrlKey
     const startWorld = screenToWorld(event.clientX, event.clientY)
+    const bounds = selectedBounds()
+
+    if (!additive && bounds && boxContainsPoint(bounds, startWorld)) {
+      setEditingId(null)
+      startSelectedItemsDrag(event, selectedIds(), startWorld)
+      return
+    }
 
     setEditingId(null)
     if (!additive) setSelectedIds([])
@@ -811,19 +836,10 @@ function App() {
         ? [...currentIds, item.id]
         : [item.id]
     const dragIds = unique(nextIds)
-    const dragSet = new Set(dragIds)
 
     setSelectedIds(dragIds)
     setEditingId((current) => (current === item.id ? current : null))
-    setInteraction({
-      kind: 'drag',
-      pointerId: event.pointerId,
-      ids: dragIds,
-      startWorld: screenToWorld(event.clientX, event.clientY),
-      origins: items()
-        .filter((entry) => dragSet.has(entry.id))
-        .map((entry) => ({ id: entry.id, x: entry.x, y: entry.y })),
-    })
+    startSelectedItemsDrag(event, dragIds, screenToWorld(event.clientX, event.clientY))
   }
 
   const handleResizePointerDown = (
