@@ -27,6 +27,16 @@ type SavedNotebook = {
   view: Viewport
 }
 
+type WorkspaceMode = 'local' | 'shared'
+
+type SharedStateResponse = {
+  ok: boolean
+  revision: number
+  payload: SavedNotebook | null
+  clients: number
+  empty: boolean
+}
+
 type Point = {
   x: number
   y: number
@@ -93,6 +103,8 @@ const PALETTE = ['#fff7c7', '#ffd8df', '#d7f2ff', '#d8f5dd', '#eadcff', '#ffe1bd
 const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+const stableStringify = (notebook: SavedNotebook) => JSON.stringify(notebook)
 
 const isItemTool = (value: Tool): value is ItemType =>
   ['text', 'note', 'rect', 'ellipse', 'diamond'].includes(value)
@@ -214,9 +226,51 @@ const isEditableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable)
 
-const isTaskLine = (line: string) => /^[-*]\s+\[( |x|X)\]\s+/.test(line)
-const isBulletLine = (line: string) => /^[-*]\s+/.test(line) && !isTaskLine(line)
-const isOrderedLine = (line: string) => /^\d+[.)]\s+/.test(line)
+type ListLine = {
+  kind: 'task' | 'bullet' | 'ordered'
+  indent: number
+  marker: string
+  text: string
+  done?: boolean
+}
+
+const indentWidth = (value: string) =>
+  [...value].reduce((total, character) => total + (character === '\t' ? 2 : 1), 0)
+
+const parseListLine = (line: string): ListLine | null => {
+  const task = line.match(/^(\s*)[-*]\s+\[( |x|X)\]\s+(.*)$/)
+  if (task) {
+    return {
+      kind: 'task',
+      indent: Math.floor(indentWidth(task[1]) / 2),
+      marker: '',
+      text: task[3],
+      done: task[2].toLowerCase() === 'x',
+    }
+  }
+
+  const bullet = line.match(/^(\s*)[-*]\s+(.*)$/)
+  if (bullet) {
+    return {
+      kind: 'bullet',
+      indent: Math.floor(indentWidth(bullet[1]) / 2),
+      marker: '•',
+      text: bullet[2],
+    }
+  }
+
+  const ordered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/)
+  if (ordered) {
+    return {
+      kind: 'ordered',
+      indent: Math.floor(indentWidth(ordered[1]) / 2),
+      marker: `${ordered[2]}.`,
+      text: ordered[3],
+    }
+  }
+
+  return null
+}
 
 const renderInline = (value: string): JSX.Element[] => {
   const nodes: JSX.Element[] = []
@@ -291,42 +345,32 @@ const renderFormattedText = (text: string): JSX.Element[] => {
       continue
     }
 
-    if (isTaskLine(trimmed)) {
-      const tasks: JSX.Element[] = []
-      while (index < lines.length && isTaskLine(lines[index].trim())) {
-        const match = lines[index].trim().match(/^[-*]\s+\[( |x|X)\]\s+(.*)$/)
-        if (match) {
-          const done = match[1].toLowerCase() === 'x'
-          tasks.push(
-            <li class={done ? 'is-done' : ''}>
-              <span class={done ? 'task-box is-checked' : 'task-box'} />
-              <span>{renderInline(match[2])}</span>
-            </li>,
-          )
-        }
+    if (parseListLine(line)) {
+      const listRows: ListLine[] = []
+      while (index < lines.length) {
+        const parsed = parseListLine(lines[index])
+        if (!parsed) break
+        listRows.push(parsed)
         index += 1
       }
-      blocks.push(<ul class="task-list">{tasks}</ul>)
-      continue
-    }
 
-    if (isBulletLine(trimmed)) {
-      const bullets: JSX.Element[] = []
-      while (index < lines.length && isBulletLine(lines[index].trim())) {
-        bullets.push(<li>{renderInline(lines[index].trim().replace(/^[-*]\s+/, ''))}</li>)
-        index += 1
-      }
-      blocks.push(<ul>{bullets}</ul>)
-      continue
-    }
-
-    if (isOrderedLine(trimmed)) {
-      const ordered: JSX.Element[] = []
-      while (index < lines.length && isOrderedLine(lines[index].trim())) {
-        ordered.push(<li>{renderInline(lines[index].trim().replace(/^\d+[.)]\s+/, ''))}</li>)
-        index += 1
-      }
-      blocks.push(<ol>{ordered}</ol>)
+      blocks.push(
+        <div class="nested-list">
+          {listRows.map((row) => (
+            <div
+              class={`nested-list-row row-${row.kind}${row.done ? ' is-done' : ''}`}
+              style={`--list-indent: ${row.indent};`}
+            >
+              {row.kind === 'task' ? (
+                <span class={row.done ? 'task-box is-checked' : 'task-box'} />
+              ) : (
+                <span class="list-marker">{row.marker}</span>
+              )}
+              <span>{renderInline(row.text)}</span>
+            </div>
+          ))}
+        </div>,
+      )
       continue
     }
 
@@ -403,11 +447,19 @@ function App() {
   const saved = loadNotebook()
   const [items, setItems] = createSignal<CanvasItem[]>(saved.items)
   const [view, setView] = createSignal<Viewport>(saved.view)
+  const [workspaceMode, setWorkspaceMode] = createSignal<WorkspaceMode>('local')
   const [tool, setTool] = createSignal<Tool>('selection')
   const [selectedIds, setSelectedIds] = createSignal<string[]>(items()[0] ? [items()[0].id] : [])
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [interaction, setInteraction] = createSignal<Interaction | null>(null)
   const [saveState, setSaveState] = createSignal('autosaved locally')
+  const [shareState, setShareState] = createSignal('start with pnpm share on your LAN')
+  const shareClientId = createId()
+  let applyingRemote = false
+  let remoteRevision = 0
+  let lastSharedSignature = ''
+  let pollTimer: number | undefined
+  let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
 
   const selectedItems = createMemo(() => {
@@ -444,12 +496,28 @@ function App() {
   )
 
   createEffect(() => {
+    if (workspaceMode() !== 'local' || applyingRemote) return
+
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: items(), view: view() }))
       setSaveState('autosaved locally')
     } catch {
       setSaveState('storage unavailable')
     }
+  })
+
+  createEffect(() => {
+    if (workspaceMode() !== 'shared') return
+
+    const payload = { items: items(), view: view() }
+    const signature = stableStringify(payload)
+    if (applyingRemote || signature === lastSharedSignature) return
+
+    lastSharedSignature = signature
+    window.clearTimeout(pushTimer)
+    pushTimer = window.setTimeout(() => {
+      void pushSharedState(payload)
+    }, 140)
   })
 
   createEffect(() => {
@@ -484,6 +552,109 @@ function App() {
       originX: view().x,
       originY: view().y,
     })
+  }
+
+  const clearShareTimers = () => {
+    window.clearInterval(pollTimer)
+    window.clearTimeout(pushTimer)
+    pollTimer = undefined
+    pushTimer = undefined
+  }
+
+  const applyRemoteNotebook = (payload: SavedNotebook) => {
+    applyingRemote = true
+    setItems(payload.items)
+    setView(payload.view)
+    setSelectedIds([])
+    setEditingId(null)
+    setInteraction(null)
+    queueMicrotask(() => {
+      applyingRemote = false
+    })
+  }
+
+  const fetchSharedState = async () => {
+    const response = await fetch(`/api/localnet/state?client=${encodeURIComponent(shareClientId)}`, {
+      cache: 'no-store',
+    })
+    if (!response.ok) throw new Error(`Local net share returned ${response.status}`)
+    return (await response.json()) as SharedStateResponse
+  }
+
+  const pushSharedState = async (payload: SavedNotebook) => {
+    try {
+      const response = await fetch('/api/localnet/state', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ client: shareClientId, payload }),
+      })
+      if (!response.ok) throw new Error(`Local net share returned ${response.status}`)
+
+      const result = (await response.json()) as SharedStateResponse
+      remoteRevision = result.revision
+      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
+    } catch {
+      setShareState('share server disconnected')
+    }
+  }
+
+  const pollSharedState = async () => {
+    try {
+      const result = await fetchSharedState()
+      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
+
+      if (result.payload && result.revision > remoteRevision) {
+        remoteRevision = result.revision
+        lastSharedSignature = stableStringify(result.payload)
+        applyRemoteNotebook(result.payload)
+      }
+    } catch {
+      setShareState('share server unavailable')
+      clearShareTimers()
+      applyRemoteNotebook(loadNotebook())
+      setWorkspaceMode('local')
+    }
+  }
+
+  const enterSharedMode = async () => {
+    if (workspaceMode() === 'shared') return
+
+    setShareState('connecting to local net share...')
+    try {
+      const result = await fetchSharedState()
+      const payload = result.payload ?? { items: [], view: defaultView() }
+
+      remoteRevision = result.revision
+      lastSharedSignature = stableStringify(payload)
+      setWorkspaceMode('shared')
+      applyRemoteNotebook(payload)
+      setTool('selection')
+      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
+      clearShareTimers()
+      pollTimer = window.setInterval(() => {
+        void pollSharedState()
+      }, 650)
+    } catch {
+      setWorkspaceMode('local')
+      setShareState('run pnpm share, then open the LAN URL')
+    }
+  }
+
+  const leaveSharedMode = () => {
+    if (workspaceMode() === 'local') return
+
+    sendShareLeave()
+    clearShareTimers()
+    applyRemoteNotebook(loadNotebook())
+    setTool('selection')
+    setShareState('left local net share')
+    setWorkspaceMode('local')
+  }
+
+  const sendShareLeave = () => {
+    if (workspaceMode() !== 'shared') return
+    const body = JSON.stringify({ client: shareClientId })
+    navigator.sendBeacon?.('/api/localnet/leave', new Blob([body], { type: 'application/json' }))
   }
 
   const screenToWorld = (clientX: number, clientY: number): Point => {
@@ -794,6 +965,44 @@ function App() {
     event: KeyboardEvent & { currentTarget: HTMLTextAreaElement },
     item: CanvasItem,
   ) => {
+    if (event.key === 'Tab') {
+      event.preventDefault()
+
+      const editor = event.currentTarget
+      const value = editor.value
+      const selectionStart = editor.selectionStart
+      const selectionEnd = editor.selectionEnd
+      const blockStart = value.lastIndexOf('\n', selectionStart - 1) + 1
+      const nextBreak = value.indexOf('\n', selectionEnd)
+      const blockEnd = nextBreak === -1 ? value.length : nextBreak
+      const block = value.slice(blockStart, blockEnd)
+      const lines = block.split('\n')
+      const updatedLines = lines.map((line) => {
+        if (!event.shiftKey) return `  ${line}`
+        if (line.startsWith('  ')) return line.slice(2)
+        if (line.startsWith('\t')) return line.slice(1)
+        if (line.startsWith(' ')) return line.slice(1)
+        return line
+      })
+      const updatedBlock = updatedLines.join('\n')
+      const nextText = `${value.slice(0, blockStart)}${updatedBlock}${value.slice(blockEnd)}`
+
+      updateItem(item.id, { text: nextText })
+      requestAnimationFrame(() => {
+        if (selectionStart === selectionEnd) {
+          const cursorDelta = updatedLines[0].length - lines[0].length
+          const nextCursor = Math.max(blockStart, selectionStart + cursorDelta)
+          editor.selectionStart = nextCursor
+          editor.selectionEnd = nextCursor
+          return
+        }
+
+        editor.selectionStart = blockStart
+        editor.selectionEnd = blockStart + updatedBlock.length
+      })
+      return
+    }
+
     if (event.key !== 'Enter' || event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) return
 
     const editor = event.currentTarget
@@ -840,12 +1049,16 @@ function App() {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('pagehide', sendShareLeave)
   })
 
   onCleanup(() => {
+    clearShareTimers()
+    if (workspaceMode() === 'shared') sendShareLeave()
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
+    window.removeEventListener('pagehide', sendShareLeave)
   })
 
   return (
@@ -853,7 +1066,24 @@ function App() {
       <section class="toolbar" aria-label="Canvas tools" onPointerDown={(event) => event.stopPropagation()}>
         <div class="brand-mark">
           <strong>pencil note</strong>
-          <span>{saveState()}</span>
+          <span>{workspaceMode() === 'shared' ? shareState() : saveState()}</span>
+        </div>
+
+        <div class="workspace-tabs" aria-label="Notebook workspace">
+          <button
+            class={workspaceMode() === 'local' ? 'workspace-tab is-active' : 'workspace-tab'}
+            type="button"
+            onClick={leaveSharedMode}
+          >
+            Local notes
+          </button>
+          <button
+            class={workspaceMode() === 'shared' ? 'workspace-tab is-active' : 'workspace-tab'}
+            type="button"
+            onClick={() => void enterSharedMode()}
+          >
+            Local net share
+          </button>
         </div>
 
         <div class="tool-strip">
@@ -956,26 +1186,35 @@ function App() {
                   <div class="diamond-fill" />
                 </Show>
 
-                <div class="item-content">
+                <div class={editingId() === item().id ? 'item-content has-live-preview' : 'item-content'}>
                   <Show
                     when={editingId() === item().id}
                     fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
                   >
-                    <textarea
-                      ref={(element) => {
-                        requestAnimationFrame(() => {
-                          element.focus()
-                          element.setSelectionRange(element.value.length, element.value.length)
-                        })
-                      }}
-                      class="note-editor"
-                      value={item().text}
-                      spellcheck={false}
-                      onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
-                      onKeyDown={(event) => handleEditorKeyDown(event, item())}
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
-                    />
+                    <div class="editor-shell">
+                      <label class="editor-pane">
+                        <span>Markdown</span>
+                        <textarea
+                          ref={(element) => {
+                            requestAnimationFrame(() => {
+                              element.focus()
+                              element.setSelectionRange(element.value.length, element.value.length)
+                            })
+                          }}
+                          class="note-editor"
+                          value={item().text}
+                          spellcheck={false}
+                          onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
+                          onKeyDown={(event) => handleEditorKeyDown(event, item())}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
+                        />
+                      </label>
+                      <div class="preview-pane" aria-label="Live Markdown preview">
+                        <span>Preview</span>
+                        <div class="formatted-text">{renderFormattedText(item().text)}</div>
+                      </div>
+                    </div>
                   </Show>
                 </div>
 

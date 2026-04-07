@@ -9,6 +9,14 @@ pnpm install
 pnpm dev
 ```
 
+LAN 内の一時共有キャンバスを使う場合:
+
+```bash
+pnpm share
+```
+
+表示された `LAN URL` を同じネットワーク内の端末で開き、アプリ内の `Local net share` タブへ切り替えます。
+
 ## Features
 
 - ノート、テキストフレーム、四角、丸、ダイヤ形をキャンバスに配置
@@ -18,7 +26,10 @@ pnpm dev
 - Pan モード、またはトラックパッド/ホイールでキャンバス移動
 - `Ctrl`/`Cmd` + ホイール、または右下のボタンで拡大縮小
 - ダブルクリックでテキスト編集
+- 編集中も Markdown のライブプレビューを表示
+- 箇条書きはインデントでネストでき、`Tab` / `Shift + Tab` で段下げ/段上げ
 - `localStorage` に自動保存され、ブラウザを閉じても前回の内容を復元
+- `Local net share` タブでは同一 LAN の閲覧者同士だけで同期し、`localStorage` には保存しない
 - `- `、`1. `、`# `、`- [ ]`、`**bold**`、`*italic*`、`` `code` ``、`> quote` の簡易フォーマット
 
 ## Shortcuts
@@ -30,6 +41,7 @@ pnpm dev
 - `R`: 四角
 - `O`: 丸
 - `D`: ダイヤ形
+- `Tab` / `Shift + Tab`: 編集中のリストをインデント/アウトデント
 - `Delete` / `Backspace`: 選択中の要素を削除
 - `Ctrl`/`Cmd` + `D`: 複製
 - `+` / `-`: 拡大縮小

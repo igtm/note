@@ -95,6 +95,7 @@
 }
 
 .tool-strip,
+.workspace-tabs,
 .toolbar-actions,
 .zoom-controls {
   display: flex;
@@ -104,6 +105,7 @@
 }
 
 .tool-button,
+.workspace-tab,
 .toolbar-actions button,
 .zoom-controls button {
   border: 1px solid rgba(72, 54, 32, 0.15);
@@ -119,6 +121,7 @@
 }
 
 .tool-button:hover,
+.workspace-tab:hover,
 .toolbar-actions button:hover,
 .zoom-controls button:hover {
   transform: translateY(-1px);
@@ -127,11 +130,32 @@
 }
 
 .tool-button:focus-visible,
+.workspace-tab:focus-visible,
 .toolbar-actions button:focus-visible,
 .zoom-controls button:focus-visible,
 .resize-handle:focus-visible {
   outline: 3px solid rgba(255, 149, 110, 0.45);
   outline-offset: 2px;
+}
+
+.workspace-tabs {
+  width: max-content;
+  max-width: 100%;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(112, 82, 43, 0.08);
+}
+
+.workspace-tab {
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.workspace-tab.is-active {
+  color: #412814;
+  background: #fff4c8;
+  border-color: rgba(131, 76, 27, 0.26);
+  box-shadow: inset 0 -2px 0 rgba(131, 76, 27, 0.1);
 }
 
 .tool-button {
@@ -451,6 +475,36 @@
   margin-top: 4px;
 }
 
+.nested-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.nested-list + .nested-list,
+.nested-list + p,
+p + .nested-list {
+  margin-top: 10px;
+}
+
+.nested-list-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: calc(var(--list-indent) * 1.15em);
+}
+
+.nested-list-row.is-done {
+  color: rgba(69, 55, 37, 0.58);
+  text-decoration: line-through;
+}
+
+.list-marker {
+  flex: 0 0 1.1em;
+  color: rgba(69, 55, 37, 0.78);
+  text-align: right;
+}
+
 .task-list {
   padding-left: 0 !important;
   list-style: none;
@@ -535,6 +589,61 @@
   font: inherit;
   font-size: 22px;
   line-height: 1.5;
+}
+
+.item-content.has-live-preview {
+  padding: 16px;
+}
+
+.item-rect .item-content.has-live-preview,
+.item-ellipse .item-content.has-live-preview,
+.item-diamond .item-content.has-live-preview {
+  display: block;
+  text-align: left;
+}
+
+.editor-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-pane,
+.preview-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-radius: 16px;
+}
+
+.editor-pane > span,
+.preview-pane > span {
+  color: rgba(69, 55, 37, 0.62);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.editor-pane {
+  gap: 6px;
+}
+
+.preview-pane {
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1.5px dashed rgba(69, 55, 37, 0.2);
+}
+
+.preview-pane .formatted-text {
+  display: block;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+  font-size: 20px;
 }
 
 .resize-handle {
