@@ -701,7 +701,7 @@ function App() {
     }
 
     if (nextTool === 'text') {
-      return { ...base, x: point.x - 20, y: point.y - 20, w: 320, h: 190, color: '#ffffff' }
+      return { ...base, x: point.x - 20, y: point.y - 20, w: 320, h: 120, color: 'transparent' }
     }
     if (nextTool === 'note') {
       return { ...base, x: point.x - 140, y: point.y - 95, w: 280, h: 210 }

@@ -393,7 +393,19 @@
 }
 
 .item-text .item-content {
-  background: rgba(255, 255, 255, 0.74);
+  padding: 4px 6px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.item-text .item-content.is-editing-content {
+  padding: 4px 6px;
+}
+
+.item-text.is-selected .item-content {
+  outline-style: dashed;
+  outline-offset: 3px;
 }
 
 .item-rect .item-content {
