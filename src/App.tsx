@@ -146,7 +146,7 @@ const defaultItems = (): CanvasItem[] => [
     w: 340,
     h: 260,
     color: '#fff7c7',
-    text: '# 今日の自由ノート\n- ハイフン + スペースで箇条書き\n- [ ] チェックボックスも使える\n- **太字** と *斜体* と `code`\n> ダブルクリックで編集',
+    text: '今日の自由ノート\n- ハイフン + スペースで箇条書き\n  - Tab でネスト\n  - Shift + Tab で戻す\n- ダブルクリックで編集',
   },
   {
     id: createId(),
@@ -156,7 +156,7 @@ const defaultItems = (): CanvasItem[] => [
     w: 320,
     h: 190,
     color: '#ffffff',
-    text: '## 使い方\nV: 範囲選択と移動\nH: キャンバス移動\nCtrl + ホイール: 拡大縮小\n図形ツールを選んでクリック: 追加\nDelete: 選択中を削除',
+    text: '使い方\n- V: 範囲選択と移動\n- H: キャンバス移動\n- Ctrl + ホイール: 拡大縮小\n- Delete: 選択中を削除',
   },
   {
     id: createId(),
@@ -276,28 +276,7 @@ const parseListLine = (line: string): ListLine | null => {
 }
 
 const renderInline = (value: string): JSX.Element[] => {
-  const nodes: JSX.Element[] = []
-  const matcher = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g
-  let cursor = 0
-  let match: RegExpExecArray | null
-
-  while ((match = matcher.exec(value))) {
-    if (match.index > cursor) nodes.push(value.slice(cursor, match.index))
-
-    const token = match[0]
-    if (token.startsWith('**')) {
-      nodes.push(<strong>{token.slice(2, -2)}</strong>)
-    } else if (token.startsWith('*')) {
-      nodes.push(<em>{token.slice(1, -1)}</em>)
-    } else {
-      nodes.push(<code>{token.slice(1, -1)}</code>)
-    }
-
-    cursor = match.index + token.length
-  }
-
-  if (cursor < value.length) nodes.push(value.slice(cursor))
-  return nodes.length ? nodes : ['']
+  return [value]
 }
 
 const renderFormattedText = (text: string): JSX.Element[] => {
@@ -314,36 +293,6 @@ const renderFormattedText = (text: string): JSX.Element[] => {
 
     if (!trimmed) {
       blocks.push(<div class="soft-break" />)
-      index += 1
-      continue
-    }
-
-    if (/^---+$/.test(trimmed)) {
-      blocks.push(<hr />)
-      index += 1
-      continue
-    }
-
-    if (trimmed.startsWith('### ')) {
-      blocks.push(<h4>{renderInline(trimmed.slice(4))}</h4>)
-      index += 1
-      continue
-    }
-
-    if (trimmed.startsWith('## ')) {
-      blocks.push(<h3>{renderInline(trimmed.slice(3))}</h3>)
-      index += 1
-      continue
-    }
-
-    if (trimmed.startsWith('# ')) {
-      blocks.push(<h2>{renderInline(trimmed.slice(2))}</h2>)
-      index += 1
-      continue
-    }
-
-    if (trimmed.startsWith('>')) {
-      blocks.push(<blockquote>{renderInline(trimmed.replace(/^>\s?/, ''))}</blockquote>)
       index += 1
       continue
     }
@@ -452,7 +401,7 @@ function App() {
   const [view, setView] = createSignal<Viewport>(saved.view)
   const [workspaceMode, setWorkspaceMode] = createSignal<WorkspaceMode>('local')
   const [tool, setTool] = createSignal<Tool>('selection')
-  const [selectedIds, setSelectedIds] = createSignal<string[]>(items()[0] ? [items()[0].id] : [])
+  const [selectedIds, setSelectedIds] = createSignal<string[]>([])
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [interaction, setInteraction] = createSignal<Interaction | null>(null)
   const [saveState, setSaveState] = createSignal('autosaved locally')
@@ -1089,16 +1038,20 @@ function App() {
           <button
             class={workspaceMode() === 'local' ? 'workspace-tab is-active' : 'workspace-tab'}
             type="button"
+            title="Local notes"
+            aria-label="Local notes"
             onClick={leaveSharedMode}
           >
-            Local notes
+            L
           </button>
           <button
             class={workspaceMode() === 'shared' ? 'workspace-tab is-active' : 'workspace-tab'}
             type="button"
+            title="Local net share"
+            aria-label="Local net share"
             onClick={() => void enterSharedMode()}
           >
-            Local net share
+            N
           </button>
         </div>
 
@@ -1120,22 +1073,45 @@ function App() {
         </div>
 
         <div class="toolbar-actions">
-          <button type="button" onClick={duplicateSelected} disabled={selectedCount() === 0}>
-            Duplicate
+          <button
+            class="action-button"
+            type="button"
+            title="Duplicate"
+            aria-label="Duplicate selected"
+            onClick={duplicateSelected}
+            disabled={selectedCount() === 0}
+          >
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="8" y="8" width="10" height="10" rx="2" />
+              <path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1" />
+            </svg>
           </button>
-          <button type="button" onClick={deleteSelected} disabled={selectedCount() === 0}>
-            Delete
+          <button
+            class="action-button"
+            type="button"
+            title="Delete"
+            aria-label="Delete selected"
+            onClick={deleteSelected}
+            disabled={selectedCount() === 0}
+          >
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 7h14" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+              <path d="M8 7l1-3h6l1 3" />
+              <path d="M7 7l1 13h8l1-13" />
+            </svg>
           </button>
         </div>
       </section>
 
-      <section class="inspector" aria-label="Selected item">
+      <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item">
         <Show
           when={selectedCount() > 0}
           fallback={
             <>
               <p class="eyebrow">Format hints</p>
-              <h1>Markdown-ish</h1>
+              <h1>Nested lists</h1>
               <p class="hint-copy">
                 V: selection, H: pan. Drag empty space in selection mode to select an area.
               </p>
@@ -1202,36 +1178,27 @@ function App() {
                   <div class="diamond-fill" />
                 </Show>
 
-                <div class={editingId() === item().id ? 'item-content has-live-preview' : 'item-content'}>
+                <div class={editingId() === item().id ? 'item-content is-editing-content' : 'item-content'}>
                   <Show
                     when={editingId() === item().id}
                     fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
                   >
-                    <div class="inline-editor-shell">
-                      <div class="inline-preview" aria-hidden="true">
-                        <div class="formatted-text">{renderFormattedText(item().text)}</div>
-                      </div>
-                      <textarea
-                        ref={(element) => {
-                          requestAnimationFrame(() => {
-                            element.focus()
-                            element.setSelectionRange(element.value.length, element.value.length)
-                          })
-                        }}
-                        class="note-editor inline-editor-input"
-                        aria-label="Markdown editor with live preview"
-                        value={item().text}
-                        spellcheck={false}
-                        onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
-                        onKeyDown={(event) => handleEditorKeyDown(event, item())}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onScroll={(event) => {
-                          const preview = event.currentTarget.previousElementSibling
-                          if (preview instanceof HTMLElement) preview.scrollTop = event.currentTarget.scrollTop
-                        }}
-                        onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
-                      />
-                    </div>
+                    <textarea
+                      ref={(element) => {
+                        requestAnimationFrame(() => {
+                          element.focus()
+                          element.setSelectionRange(element.value.length, element.value.length)
+                        })
+                      }}
+                      class="note-editor"
+                      aria-label="Nested bullet editor"
+                      value={item().text}
+                      spellcheck={false}
+                      onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
+                      onKeyDown={(event) => handleEditorKeyDown(event, item())}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
+                    />
                   </Show>
                 </div>
 
