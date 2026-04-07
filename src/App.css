@@ -602,48 +602,46 @@ p + .nested-list {
   text-align: left;
 }
 
-.editor-shell {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+.inline-editor-shell {
+  position: relative;
   width: 100%;
   height: 100%;
-}
-
-.editor-pane,
-.preview-pane {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  border-radius: 16px;
 }
 
-.editor-pane > span,
-.preview-pane > span {
-  color: rgba(69, 55, 37, 0.62);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.inline-preview {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: auto;
+  scrollbar-width: none;
 }
 
-.editor-pane {
-  gap: 6px;
+.inline-preview::-webkit-scrollbar {
+  display: none;
 }
 
-.preview-pane {
-  gap: 6px;
-  padding-left: 12px;
-  border-left: 1.5px dashed rgba(69, 55, 37, 0.2);
-}
-
-.preview-pane .formatted-text {
+.inline-preview .formatted-text {
   display: block;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding-right: 4px;
-  font-size: 20px;
+}
+
+.inline-editor-input {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  caret-color: var(--ink-strong);
+  overflow: auto;
+  tab-size: 2;
+  text-decoration-color: transparent;
+}
+
+.inline-editor-input::selection {
+  color: transparent;
+  background: rgba(255, 156, 91, 0.3);
 }
 
 .resize-handle {

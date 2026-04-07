@@ -1207,29 +1207,30 @@ function App() {
                     when={editingId() === item().id}
                     fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
                   >
-                    <div class="editor-shell">
-                      <label class="editor-pane">
-                        <span>Markdown</span>
-                        <textarea
-                          ref={(element) => {
-                            requestAnimationFrame(() => {
-                              element.focus()
-                              element.setSelectionRange(element.value.length, element.value.length)
-                            })
-                          }}
-                          class="note-editor"
-                          value={item().text}
-                          spellcheck={false}
-                          onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
-                          onKeyDown={(event) => handleEditorKeyDown(event, item())}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
-                        />
-                      </label>
-                      <div class="preview-pane" aria-label="Live Markdown preview">
-                        <span>Preview</span>
+                    <div class="inline-editor-shell">
+                      <div class="inline-preview" aria-hidden="true">
                         <div class="formatted-text">{renderFormattedText(item().text)}</div>
                       </div>
+                      <textarea
+                        ref={(element) => {
+                          requestAnimationFrame(() => {
+                            element.focus()
+                            element.setSelectionRange(element.value.length, element.value.length)
+                          })
+                        }}
+                        class="note-editor inline-editor-input"
+                        aria-label="Markdown editor with live preview"
+                        value={item().text}
+                        spellcheck={false}
+                        onInput={(event) => updateItem(item().id, { text: event.currentTarget.value })}
+                        onKeyDown={(event) => handleEditorKeyDown(event, item())}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onScroll={(event) => {
+                          const preview = event.currentTarget.previousElementSibling
+                          if (preview instanceof HTMLElement) preview.scrollTop = event.currentTarget.scrollTop
+                        }}
+                        onBlur={() => setEditingId((current) => (current === item().id ? null : current))}
+                      />
                     </div>
                   </Show>
                 </div>
