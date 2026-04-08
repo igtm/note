@@ -6,7 +6,6 @@ import {
   createEmptyContent,
   isPathItem,
   isTextCanvasItem,
-  legacyTextToContent,
   normalizeStoredNotebook,
   type CanvasItem,
   type FontFamily,
@@ -339,52 +338,7 @@ const defaultView = (): Viewport => ({
   zoom: 1,
 })
 
-const defaultItems = (): CanvasItem[] => [
-  {
-    id: createId(),
-    type: 'rect',
-    x: 0,
-    y: 0,
-    w: 340,
-    h: 220,
-    content: legacyTextToContent(
-      '図形サンプル\nダブルクリックで文字を入れる',
-    ),
-    ...createDefaultItemStyle('rect'),
-  },
-  {
-    id: createId(),
-    type: 'text',
-    x: 410,
-    y: 48,
-    w: 320,
-    h: 190,
-    content: legacyTextToContent(
-      '使い方\n- V: 範囲選択と移動\n- H: キャンバス移動\n- P: 鉛筆\n- E: 消しゴム\n- R / O / D: ドラッグで図形作成\n- Ctrl + ホイール: 拡大縮小',
-    ),
-    ...createDefaultItemStyle('text'),
-  },
-  {
-    id: createId(),
-    type: 'ellipse',
-    x: 180,
-    y: 340,
-    w: 260,
-    h: 150,
-    content: legacyTextToContent('ふわっと\nアイデア'),
-    ...createDefaultItemStyle('ellipse'),
-  },
-  {
-    id: createId(),
-    type: 'diamond',
-    x: 520,
-    y: 330,
-    w: 180,
-    h: 180,
-    content: legacyTextToContent('あとで\n考える'),
-    ...createDefaultItemStyle('diamond'),
-  },
-]
+const defaultItems = (): CanvasItem[] => []
 
 const loadNotebook = (): SavedNotebook => {
   if (typeof localStorage === 'undefined') return { items: defaultItems(), view: defaultView() }
