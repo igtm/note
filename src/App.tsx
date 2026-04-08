@@ -4,6 +4,7 @@ import { RichTextItem } from './RichTextItem'
 import {
   createDefaultItemStyle,
   createEmptyContent,
+  isImageItem,
   isPathItem,
   isTextCanvasItem,
   normalizeStoredNotebook,
@@ -340,6 +341,37 @@ const defaultView = (): Viewport => ({
 
 const defaultItems = (): CanvasItem[] => []
 
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('Image paste returned an unreadable payload'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read pasted image'))
+    reader.readAsDataURL(file)
+  })
+
+const measureImage = (src: string) =>
+  new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height })
+    image.onerror = () => reject(new Error('Failed to decode pasted image'))
+    image.src = src
+  })
+
+const fitImageWithinFrame = (width: number, height: number) => {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { w: 320, h: 240 }
+  }
+
+  const scale = Math.min(1, 560 / width, 420 / height)
+  return {
+    w: Math.max(80, Math.round(width * scale)),
+    h: Math.max(80, Math.round(height * scale)),
+  }
+}
+
 const loadNotebook = (): SavedNotebook => {
   if (typeof localStorage === 'undefined') return { items: defaultItems(), view: defaultView() }
 
@@ -367,6 +399,7 @@ const typeLabel = (type: ItemType) =>
     ellipse: 'Circle',
     diamond: 'Diamond',
     path: 'Stroke',
+    image: 'Image',
   })[type]
 
 const ToolIcon = (props: { tool: Tool }) => {
@@ -496,6 +529,11 @@ function App() {
   let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
   const itemContentRefs = new Map<string, HTMLDivElement>()
+
+  const viewportCenterWorld = (): Point => ({
+    x: (stageRef.clientWidth / 2 - view().x) / view().zoom,
+    y: (stageRef.clientHeight / 2 - view().y) / view().zoom,
+  })
 
   const selectedItems = createMemo(() => {
     const ids = new Set(selectedIds())
@@ -876,6 +914,37 @@ function App() {
     setEditingId(item.id)
   }
 
+  const pasteImageFiles = async (files: File[]) => {
+    if (!files.length) return
+
+    const center = viewportCenterWorld()
+    const nextItems = await Promise.all(
+      files.map(async (file, index) => {
+        const src = await readFileAsDataUrl(file)
+        const imageSize = await measureImage(src).catch(() => ({ width: 320, height: 240 }))
+        const size = fitImageWithinFrame(imageSize.width, imageSize.height)
+
+        return {
+          id: createId(),
+          type: 'image',
+          x: Math.round(center.x - size.w / 2 + index * 24),
+          y: Math.round(center.y - size.h / 2 + index * 24),
+          w: size.w,
+          h: size.h,
+          src,
+          mimeType: file.type || undefined,
+          name: file.name || undefined,
+          ...createDefaultItemStyle('image'),
+        } as CanvasItem
+      }),
+    )
+
+    setItems((current) => [...current, ...nextItems])
+    setSelectedIds(nextItems.map((item) => item.id))
+    setEditingId(null)
+    setTool('selection')
+  }
+
   const startDraw = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     const point = screenToWorld(event.clientX, event.clientY)
     const style = createDefaultItemStyle('path')
@@ -1165,6 +1234,23 @@ function App() {
     }))
   }
 
+  const handlePaste = (event: ClipboardEvent) => {
+    if (isEditableTarget(event.target)) return
+
+    const files =
+      event.clipboardData?.items
+        ? [...event.clipboardData.items]
+            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null)
+        : []
+
+    if (!files.length) return
+
+    event.preventDefault()
+    void pasteImageFiles(files)
+  }
+
   const handleKeyDown = (event: KeyboardEvent) => {
     if (isEditableTarget(event.target)) {
       if (event.key === 'Escape') setEditingId(null)
@@ -1237,6 +1323,7 @@ function App() {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('paste', handlePaste)
     window.addEventListener('pagehide', sendShareLeave)
 
     onCleanup(() => {
@@ -1250,6 +1337,7 @@ function App() {
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
+    window.removeEventListener('paste', handlePaste)
     window.removeEventListener('pagehide', sendShareLeave)
   })
 
@@ -1533,7 +1621,7 @@ function App() {
                   style={style()}
                   onPointerDown={(event) => handleItemPointerDown(event, item)}
                   onDblClick={(event) => {
-                    if (isPathItem(item)) return
+                    if (isPathItem(item) || isImageItem(item)) return
                     event.stopPropagation()
                     setSelectedIds([item.id])
                     setEditingId(item.id)
@@ -1546,30 +1634,46 @@ function App() {
                   <Show
                     when={isPathItem(item)}
                     fallback={
-                      <div
-                        ref={(element) => {
-                          itemContentRefs.set(item.id, element)
-                          scheduleFitItemHeight(item.id)
-                        }}
-                        class="item-content"
+                      <Show
+                        when={isImageItem(item) ? item : null}
+                        fallback={
+                          <div
+                            ref={(element) => {
+                              itemContentRefs.set(item.id, element)
+                              scheduleFitItemHeight(item.id)
+                            }}
+                            class="item-content"
+                          >
+                            <RichTextItem
+                              content={isTextCanvasItem(item) ? item.content : createEmptyContent()}
+                              editable={isEditing()}
+                              placeholder="Double click to write"
+                              onContentChange={(content) => {
+                                if (!isTextCanvasItem(item)) return
+                                updateItem(item.id, { content })
+                              }}
+                              onLayoutChange={() => {
+                                scheduleFitItemHeight(item.id)
+                              }}
+                              onBlur={() => {
+                                scheduleFitItemHeight(item.id)
+                                setEditingId((current) => (current === item.id ? null : current))
+                              }}
+                            />
+                          </div>
+                        }
                       >
-                        <RichTextItem
-                          content={isTextCanvasItem(item) ? item.content : createEmptyContent()}
-                          editable={isEditing()}
-                          placeholder="Double click to write"
-                          onContentChange={(content) => {
-                            if (!isTextCanvasItem(item)) return
-                            updateItem(item.id, { content })
-                          }}
-                          onLayoutChange={() => {
-                            scheduleFitItemHeight(item.id)
-                          }}
-                          onBlur={() => {
-                            scheduleFitItemHeight(item.id)
-                            setEditingId((current) => (current === item.id ? null : current))
-                          }}
-                        />
-                      </div>
+                        {(imageItem) => (
+                          <div class="item-content">
+                            <img
+                              class="image-item"
+                              src={imageItem().src}
+                              alt={imageItem().name ?? 'Pasted image'}
+                              draggable={false}
+                            />
+                          </div>
+                        )}
+                      </Show>
                     }
                   >
                     <PathStroke item={item as PathCanvasItem} />

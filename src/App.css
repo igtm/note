@@ -534,6 +534,13 @@
   box-shadow: none;
 }
 
+.item-image .item-content {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 22px;
+  box-shadow: none;
+}
+
 .item-text.is-selected .item-content {
   outline-style: dashed;
   outline-offset: 3px;
@@ -617,6 +624,16 @@
 .item-editor-surface ul,
 .item-editor-surface ol {
   margin: 0;
+}
+
+.image-item {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
 }
 
 .item-editor-surface p + p,

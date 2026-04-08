@@ -148,4 +148,47 @@ describe('normalizeStoredNotebook', () => {
       view: { x: 0, y: 0, zoom: 1 },
     })
   })
+
+  it('accepts image items and injects image defaults', () => {
+    const notebook = normalizeStoredNotebook({
+      items: [
+        {
+          id: 'image-1',
+          type: 'image',
+          x: 32,
+          y: 48,
+          w: 240,
+          h: 180,
+          src: 'data:image/png;base64,abc',
+          mimeType: 'image/png',
+          name: 'paste.png',
+        },
+      ],
+      view: { x: 10, y: 20, zoom: 1 },
+    })
+
+    expect(notebook).toEqual({
+      items: [
+        {
+          id: 'image-1',
+          type: 'image',
+          x: 32,
+          y: 48,
+          w: 240,
+          h: 180,
+          src: 'data:image/png;base64,abc',
+          mimeType: 'image/png',
+          name: 'paste.png',
+          color: 'transparent',
+          stroke: 'transparent',
+          strokeWidth: 'thin',
+          strokeStyle: 'solid',
+          fontFamily: 'hand',
+          fontSize: 'md',
+          textAlign: 'center',
+        },
+      ],
+      view: { x: 10, y: 20, zoom: 1 },
+    })
+  })
 })
