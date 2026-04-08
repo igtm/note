@@ -1,10 +1,57 @@
 @import url('https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&display=swap');
 
 :root {
+  color-scheme: light;
   --ink: #594734;
   --ink-strong: #2d1f14;
   --muted: #8a735b;
   --paper: #fff8e8;
+  --app-accent: rgba(255, 179, 198, 0.18);
+  --app-bg-start: #fffaf0;
+  --app-bg-end: #f4efe3;
+  --canvas-bg: #f7f0df;
+  --canvas-dot: rgba(63, 48, 31, 0.18);
+  --canvas-grid: rgba(120, 92, 52, 0.08);
+  --panel-border: rgba(72, 54, 32, 0.18);
+  --panel-shadow: 0 18px 50px rgba(67, 49, 21, 0.13);
+  --panel-bg: rgba(255, 250, 239, 0.78);
+  --panel-bg-strong: rgba(255, 250, 239, 0.86);
+  --panel-bg-soft: rgba(255, 250, 239, 0.82);
+  --divider: rgba(72, 54, 32, 0.16);
+  --surface-bg: rgba(255, 255, 255, 0.58);
+  --surface-bg-strong: rgba(255, 255, 255, 0.8);
+  --surface-border: rgba(72, 54, 32, 0.15);
+  --surface-border-soft: rgba(72, 54, 32, 0.12);
+  --surface-border-strong: rgba(72, 54, 32, 0.3);
+  --surface-shadow-hover: 0 8px 24px rgba(67, 49, 21, 0.12);
+  --card-shadow-hover: 0 8px 18px rgba(67, 49, 21, 0.1);
+  --focus-ring: rgba(255, 149, 110, 0.45);
+  --active-ink: #412814;
+  --active-bg: #ffe0b2;
+  --active-border: rgba(131, 76, 27, 0.28);
+  --active-shadow: inset 0 -3px 0 rgba(131, 76, 27, 0.12);
+  --active-bg-soft: #fff0d2;
+  --active-shadow-soft: inset 0 -2px 0 rgba(131, 76, 27, 0.12);
+  --workspace-active-bg: #fff4c8;
+  --workspace-active-border: rgba(131, 76, 27, 0.26);
+  --workspace-active-shadow: inset 0 -2px 0 rgba(131, 76, 27, 0.1);
+  --tool-icon-fill: rgba(255, 255, 255, 0.22);
+  --selection-outline: rgba(255, 140, 89, 0.72);
+  --selection-area-border: rgba(255, 130, 82, 0.92);
+  --selection-area-bg: rgba(255, 189, 145, 0.16);
+  --selection-area-shadow: 0 0 0 5px rgba(255, 245, 225, 0.24);
+  --multi-selection-border: rgba(98, 70, 31, 0.5);
+  --multi-selection-shadow: 0 0 0 7px rgba(255, 244, 200, 0.24);
+  --note-shadow: 0 18px 40px rgba(71, 52, 24, 0.16);
+  --note-inset: rgba(255, 255, 255, 0.08);
+  --note-rule: rgba(91, 72, 38, 0.12);
+  --note-sheen: rgba(255, 255, 255, 0.35);
+  --task-accent: #8f6b2b;
+  --text-strike: rgba(69, 55, 37, 0.58);
+  --placeholder: rgba(69, 55, 37, 0.46);
+  --resize-border: rgba(86, 56, 28, 0.52);
+  --resize-bg: #fff4c8;
+  --resize-shadow: 0 6px 16px rgba(67, 49, 21, 0.18);
   --mono: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --hand: 'Klee One', 'Hiragino Maru Gothic ProN', 'Yu Gothic', 'Comic Sans MS', cursive;
 
@@ -17,6 +64,60 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ink: #d7c7b5;
+  --ink-strong: #f4eadb;
+  --muted: #a69179;
+  --paper: #17120d;
+  --app-accent: rgba(120, 79, 167, 0.16);
+  --app-bg-start: #1b1611;
+  --app-bg-end: #120f0b;
+  --canvas-bg: #19140f;
+  --canvas-dot: rgba(240, 223, 198, 0.12);
+  --canvas-grid: rgba(240, 223, 198, 0.06);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  --panel-bg: rgba(31, 25, 19, 0.82);
+  --panel-bg-strong: rgba(31, 25, 19, 0.9);
+  --panel-bg-soft: rgba(31, 25, 19, 0.88);
+  --divider: rgba(255, 255, 255, 0.08);
+  --surface-bg: rgba(255, 255, 255, 0.06);
+  --surface-bg-strong: rgba(255, 255, 255, 0.08);
+  --surface-border: rgba(255, 255, 255, 0.1);
+  --surface-border-soft: rgba(255, 255, 255, 0.08);
+  --surface-border-strong: rgba(255, 255, 255, 0.18);
+  --surface-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --card-shadow-hover: 0 8px 18px rgba(0, 0, 0, 0.2);
+  --focus-ring: rgba(255, 176, 111, 0.35);
+  --active-ink: #1a120d;
+  --active-bg: #f0c178;
+  --active-border: rgba(240, 193, 120, 0.5);
+  --active-shadow: inset 0 -3px 0 rgba(77, 46, 13, 0.25);
+  --active-bg-soft: rgba(240, 193, 120, 0.2);
+  --active-shadow-soft: inset 0 -2px 0 rgba(240, 193, 120, 0.18);
+  --workspace-active-bg: #f1c67e;
+  --workspace-active-border: rgba(241, 198, 126, 0.5);
+  --workspace-active-shadow: inset 0 -2px 0 rgba(77, 46, 13, 0.22);
+  --tool-icon-fill: rgba(255, 255, 255, 0.08);
+  --selection-outline: rgba(255, 176, 111, 0.72);
+  --selection-area-border: rgba(255, 176, 111, 0.92);
+  --selection-area-bg: rgba(255, 176, 111, 0.14);
+  --selection-area-shadow: 0 0 0 5px rgba(34, 28, 21, 0.36);
+  --multi-selection-border: rgba(245, 214, 163, 0.45);
+  --multi-selection-shadow: 0 0 0 7px rgba(34, 28, 21, 0.36);
+  --note-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+  --note-inset: rgba(255, 255, 255, 0.04);
+  --note-rule: rgba(176, 138, 83, 0.18);
+  --note-sheen: rgba(255, 255, 255, 0.08);
+  --task-accent: #d1a95c;
+  --text-strike: rgba(215, 199, 181, 0.58);
+  --placeholder: rgba(215, 199, 181, 0.42);
+  --resize-border: rgba(255, 212, 160, 0.45);
+  --resize-bg: #3a2a16;
+  --resize-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -35,6 +136,8 @@ body,
 body {
   margin: 0;
   overflow: hidden;
+  color: var(--ink);
+  background: var(--paper);
 }
 
 button,

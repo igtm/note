@@ -1,38 +1,44 @@
-import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
-import type { JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import './App.css'
+import { RichTextItem } from './RichTextItem'
+import {
+  createDefaultItemStyle,
+  createEmptyContent,
+  isPathItem,
+  isTextCanvasItem,
+  legacyTextToContent,
+  normalizeStoredNotebook,
+  type CanvasItem,
+  type FontFamily,
+  type FontSize,
+  type ItemStyle,
+  type ItemType,
+  type PathCanvasItem,
+  type SavedNotebook,
+  type StrokeStyle,
+  type StrokeWidth,
+  type TextAlign,
+  type Viewport,
+} from './notebook'
+import {
+  THEME_OPTIONS,
+  THEME_STORAGE_KEY,
+  applyTheme,
+  getSystemTheme,
+  loadThemeMode,
+  resolveTheme,
+  type ResolvedTheme,
+  type ThemeMode,
+} from './theme'
 
-type ItemType = 'text' | 'note' | 'rect' | 'ellipse' | 'diamond'
-type Tool = 'selection' | 'pan' | ItemType
-
-type CanvasItem = {
-  id: string
-  type: ItemType
-  x: number
-  y: number
-  w: number
-  h: number
-  text: string
-  color: string
-}
-
-type Viewport = {
-  x: number
-  y: number
-  zoom: number
-}
-
-type SavedNotebook = {
-  items: CanvasItem[]
-  view: Viewport
-}
-
+type ShapeTool = 'rect' | 'ellipse' | 'diamond'
+type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
 type WorkspaceMode = 'local' | 'shared'
 
 type SharedStateResponse = {
   ok: boolean
   revision: number
-  payload: SavedNotebook | null
+  payload: unknown | null
   clients: number
   empty: boolean
 }
@@ -51,6 +57,22 @@ type ItemOrigin = {
   id: string
   x: number
   y: number
+}
+
+type DrawInteraction = {
+  kind: 'draw'
+  pointerId: number
+  id: string
+  points: Point[]
+  style: ItemStyle
+}
+
+type CreateShapeInteraction = {
+  kind: 'createShape'
+  pointerId: number
+  type: ShapeTool
+  startWorld: Point
+  currentWorld: Point
 }
 
 type Interaction =
@@ -85,31 +107,122 @@ type Interaction =
       additive: boolean
       previousIds: string[]
     }
+  | DrawInteraction
+  | CreateShapeInteraction
+  | {
+      kind: 'erase'
+      pointerId: number
+      lastWorld: Point
+    }
 
-const STORAGE_KEY = 'pencil-free-note:v1'
+const STORAGE_KEY_V1 = 'pencil-free-note:v1'
+const STORAGE_KEY_V2 = 'pencil-free-note:v2'
 
 const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
   { id: 'selection', label: 'Selection', shortcut: 'V' },
   { id: 'pan', label: 'Pan', shortcut: 'H' },
+  { id: 'pencil', label: 'Pencil', shortcut: 'P' },
+  { id: 'eraser', label: 'Eraser', shortcut: 'E' },
   { id: 'text', label: 'Text', shortcut: 'T' },
-  { id: 'note', label: 'Note', shortcut: 'N' },
   { id: 'rect', label: 'Rect', shortcut: 'R' },
   { id: 'ellipse', label: 'Circle', shortcut: 'O' },
   { id: 'diamond', label: 'Diamond', shortcut: 'D' },
 ]
 
-const PALETTE = ['#fff7c7', '#ffd8df', '#d7f2ff', '#d8f5dd', '#eadcff', '#ffe1bd']
+const STROKE_OPTIONS = [
+  { value: '#1f1f1f', label: 'Ink' },
+  { value: '#594734', label: 'Sepia' },
+  { value: '#4e6c88', label: 'Blue' },
+] as const
+
+const FILL_OPTIONS = [
+  { value: 'transparent', label: 'Clear' },
+  { value: '#fff8e8', label: 'Paper' },
+  { value: '#ffe3df', label: 'Blush' },
+] as const
+
+const STROKE_WIDTH_OPTIONS: { value: StrokeWidth; label: string }[] = [
+  { value: 'thin', label: 'Thin' },
+  { value: 'medium', label: 'Med' },
+  { value: 'bold', label: 'Bold' },
+]
+
+const STROKE_STYLE_OPTIONS: { value: StrokeStyle; label: string }[] = [
+  { value: 'solid', label: 'Solid' },
+  { value: 'dashed', label: 'Dash' },
+  { value: 'dotted', label: 'Dot' },
+]
+
+const FONT_FAMILY_OPTIONS: { value: FontFamily; label: string }[] = [
+  { value: 'hand', label: 'Hand' },
+  { value: 'sans', label: 'Sans' },
+  { value: 'mono', label: 'Mono' },
+]
+
+const FONT_SIZE_OPTIONS: { value: FontSize; label: string }[] = [
+  { value: 'sm', label: 'S' },
+  { value: 'md', label: 'M' },
+  { value: 'lg', label: 'L' },
+]
+
+const TEXT_ALIGN_OPTIONS: { value: TextAlign; label: string }[] = [
+  { value: 'left', label: 'Left' },
+  { value: 'center', label: 'Center' },
+  { value: 'right', label: 'Right' },
+]
 
 const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
-
 const stableStringify = (notebook: SavedNotebook) => JSON.stringify(notebook)
-
-const isItemTool = (value: Tool): value is ItemType =>
-  ['text', 'note', 'rect', 'ellipse', 'diamond'].includes(value)
-
 const unique = (values: string[]) => [...new Set(values)]
+
+const isShapeTool = (value: Tool): value is ShapeTool => ['rect', 'ellipse', 'diamond'].includes(value)
+
+const strokeWidthPx = (value: StrokeWidth) =>
+  ({
+    thin: 1.5,
+    medium: 2.75,
+    bold: 4.5,
+  })[value]
+
+const fontSizePx = (value: FontSize) =>
+  ({
+    sm: 18,
+    md: 22,
+    lg: 28,
+  })[value]
+
+const fontFamilyValue = (value: FontFamily) =>
+  ({
+    hand: 'var(--hand)',
+    sans: "Inter, 'Helvetica Neue', Arial, sans-serif",
+    mono: 'var(--mono)',
+  })[value]
+
+const strokeDasharray = (value: StrokeStyle) =>
+  ({
+    solid: 'none',
+    dashed: '10 8',
+    dotted: '2 8',
+  })[value]
+
+const verticalPadding = (element: HTMLElement) => {
+  const style = getComputedStyle(element)
+  return Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+}
+
+const isAutoHeightItem = (item: CanvasItem) => item.type === 'text' || item.type === 'note'
+
+const renderedEditorHeight = (container: HTMLDivElement) => {
+  const surface = container.querySelector<HTMLElement>('.item-editor-surface')
+  if (!surface) return container.scrollHeight
+
+  const children = [...surface.children].filter((child): child is HTMLElement => child instanceof HTMLElement)
+  if (!children.length) return surface.scrollHeight
+
+  return Math.max(...children.map((child) => child.offsetTop + child.offsetHeight))
+}
 
 const normalizeBox = (start: Point, end: Point): SelectionBox => ({
   x: Math.min(start.x, end.x),
@@ -131,10 +244,94 @@ const boxesIntersect = (a: SelectionBox, b: SelectionBox) =>
 const boxContainsPoint = (box: SelectionBox, point: Point) =>
   point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
 
-const verticalPadding = (element: HTMLElement) => {
-  const style = getComputedStyle(element)
-  return Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
+
+const orientation = (a: Point, b: Point, c: Point) => (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y)
+
+const onSegment = (a: Point, b: Point, c: Point) =>
+  Math.min(a.x, c.x) <= b.x &&
+  b.x <= Math.max(a.x, c.x) &&
+  Math.min(a.y, c.y) <= b.y &&
+  b.y <= Math.max(a.y, c.y)
+
+const segmentsIntersect = (a1: Point, a2: Point, b1: Point, b2: Point) => {
+  const o1 = orientation(a1, a2, b1)
+  const o2 = orientation(a1, a2, b2)
+  const o3 = orientation(b1, b2, a1)
+  const o4 = orientation(b1, b2, a2)
+
+  if (o1 === 0 && onSegment(a1, b1, a2)) return true
+  if (o2 === 0 && onSegment(a1, b2, a2)) return true
+  if (o3 === 0 && onSegment(b1, a1, b2)) return true
+  if (o4 === 0 && onSegment(b1, a2, b2)) return true
+
+  return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0)
 }
+
+const segmentHitsBox = (start: Point, end: Point, box: SelectionBox, padding: number) => {
+  const expanded = {
+    x: box.x - padding,
+    y: box.y - padding,
+    w: box.w + padding * 2,
+    h: box.h + padding * 2,
+  }
+
+  if (boxContainsPoint(expanded, start) || boxContainsPoint(expanded, end)) return true
+
+  const topLeft = { x: expanded.x, y: expanded.y }
+  const topRight = { x: expanded.x + expanded.w, y: expanded.y }
+  const bottomLeft = { x: expanded.x, y: expanded.y + expanded.h }
+  const bottomRight = { x: expanded.x + expanded.w, y: expanded.y + expanded.h }
+
+  return (
+    segmentsIntersect(start, end, topLeft, topRight) ||
+    segmentsIntersect(start, end, topRight, bottomRight) ||
+    segmentsIntersect(start, end, bottomRight, bottomLeft) ||
+    segmentsIntersect(start, end, bottomLeft, topLeft)
+  )
+}
+
+const createPathItemFromPoints = (id: string, points: Point[], style: ItemStyle): PathCanvasItem => {
+  const safePoints = points.length ? points : [{ x: 0, y: 0 }]
+  const minX = Math.min(...safePoints.map((point) => point.x))
+  const minY = Math.min(...safePoints.map((point) => point.y))
+  const maxX = Math.max(...safePoints.map((point) => point.x))
+  const maxY = Math.max(...safePoints.map((point) => point.y))
+  const padding = strokeWidthPx(style.strokeWidth) * 1.5 + 6
+  const width = Math.max(maxX - minX + padding * 2, padding * 2 + 1)
+  const height = Math.max(maxY - minY + padding * 2, padding * 2 + 1)
+
+  return {
+    id,
+    type: 'path',
+    x: minX - padding,
+    y: minY - padding,
+    w: width,
+    h: height,
+    points: safePoints.map((point) => ({
+      x: point.x - (minX - padding),
+      y: point.y - (minY - padding),
+    })),
+    ...style,
+  }
+}
+
+const shapeBoxFromDrag = (type: ShapeTool, start: Point, end: Point): SelectionBox => {
+  if (type !== 'ellipse') return normalizeBox(start, end)
+
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const size = Math.max(Math.abs(dx), Math.abs(dy))
+
+  return {
+    x: dx >= 0 ? start.x : start.x - size,
+    y: dy >= 0 ? start.y : start.y - size,
+    w: size,
+    h: size,
+  }
+}
+
+const isShapeBoxVisible = (box: SelectionBox) => box.w >= 12 && box.h >= 12
 
 const defaultView = (): Viewport => ({
   x: typeof window === 'undefined' ? 180 : Math.max(80, window.innerWidth * 0.22),
@@ -145,13 +342,15 @@ const defaultView = (): Viewport => ({
 const defaultItems = (): CanvasItem[] => [
   {
     id: createId(),
-    type: 'note',
+    type: 'rect',
     x: 0,
     y: 0,
     w: 340,
-    h: 260,
-    color: '#fff7c7',
-    text: '今日の自由ノート\n- ハイフン + スペースで箇条書き\n  - Tab でネスト\n  - Shift + Tab で戻す\n- ダブルクリックで編集',
+    h: 220,
+    content: legacyTextToContent(
+      '図形サンプル\nダブルクリックで文字を入れる',
+    ),
+    ...createDefaultItemStyle('rect'),
   },
   {
     id: createId(),
@@ -160,8 +359,10 @@ const defaultItems = (): CanvasItem[] => [
     y: 48,
     w: 320,
     h: 190,
-    color: '#ffffff',
-    text: '使い方\n- V: 範囲選択と移動\n- H: キャンバス移動\n- Ctrl + ホイール: 拡大縮小\n- Delete: 選択中を削除',
+    content: legacyTextToContent(
+      '使い方\n- V: 範囲選択と移動\n- H: キャンバス移動\n- P: 鉛筆\n- E: 消しゴム\n- R / O / D: ドラッグで図形作成\n- Ctrl + ホイール: 拡大縮小',
+    ),
+    ...createDefaultItemStyle('text'),
   },
   {
     id: createId(),
@@ -170,8 +371,8 @@ const defaultItems = (): CanvasItem[] => [
     y: 340,
     w: 260,
     h: 150,
-    color: '#d7f2ff',
-    text: 'ふわっと\nアイデア',
+    content: legacyTextToContent('ふわっと\nアイデア'),
+    ...createDefaultItemStyle('ellipse'),
   },
   {
     id: createId(),
@@ -180,49 +381,20 @@ const defaultItems = (): CanvasItem[] => [
     y: 330,
     w: 180,
     h: 180,
-    color: '#ffd8df',
-    text: 'あとで\n考える',
+    content: legacyTextToContent('あとで\n考える'),
+    ...createDefaultItemStyle('diamond'),
   },
 ]
-
-const isCanvasItem = (item: unknown): item is CanvasItem => {
-  if (!item || typeof item !== 'object') return false
-  const value = item as Partial<CanvasItem>
-  return (
-    typeof value.id === 'string' &&
-    ['text', 'note', 'rect', 'ellipse', 'diamond'].includes(value.type ?? '') &&
-    typeof value.x === 'number' &&
-    typeof value.y === 'number' &&
-    typeof value.w === 'number' &&
-    typeof value.h === 'number' &&
-    typeof value.text === 'string' &&
-    typeof value.color === 'string'
-  )
-}
 
 const loadNotebook = (): SavedNotebook => {
   if (typeof localStorage === 'undefined') return { items: defaultItems(), view: defaultView() }
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(STORAGE_KEY_V2) ?? localStorage.getItem(STORAGE_KEY_V1)
     if (!raw) return { items: defaultItems(), view: defaultView() }
 
-    const parsed = JSON.parse(raw) as Partial<SavedNotebook>
-    const view = parsed.view
-
-    if (
-      Array.isArray(parsed.items) &&
-      parsed.items.every(isCanvasItem) &&
-      view &&
-      typeof view.x === 'number' &&
-      typeof view.y === 'number' &&
-      typeof view.zoom === 'number'
-    ) {
-      return {
-        items: parsed.items,
-        view: { x: view.x, y: view.y, zoom: clamp(view.zoom, 0.25, 3) },
-      }
-    }
+    const parsed = normalizeStoredNotebook(JSON.parse(raw))
+    if (parsed) return parsed
   } catch {
     return { items: defaultItems(), view: defaultView() }
   }
@@ -231,112 +403,7 @@ const loadNotebook = (): SavedNotebook => {
 }
 
 const isEditableTarget = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable)
-
-type ListLine = {
-  kind: 'task' | 'bullet' | 'ordered'
-  indent: number
-  marker: string
-  text: string
-  done?: boolean
-}
-
-const indentWidth = (value: string) =>
-  [...value].reduce((total, character) => total + (character === '\t' ? 2 : 1), 0)
-
-const parseListLine = (line: string): ListLine | null => {
-  const task = line.match(/^(\s*)[-*]\s+\[( |x|X)\]\s+(.*)$/)
-  if (task) {
-    return {
-      kind: 'task',
-      indent: Math.floor(indentWidth(task[1]) / 2),
-      marker: '',
-      text: task[3],
-      done: task[2].toLowerCase() === 'x',
-    }
-  }
-
-  const bullet = line.match(/^(\s*)[-*]\s+(.*)$/)
-  if (bullet) {
-    return {
-      kind: 'bullet',
-      indent: Math.floor(indentWidth(bullet[1]) / 2),
-      marker: '•',
-      text: bullet[2],
-    }
-  }
-
-  const ordered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/)
-  if (ordered) {
-    return {
-      kind: 'ordered',
-      indent: Math.floor(indentWidth(ordered[1]) / 2),
-      marker: `${ordered[2]}.`,
-      text: ordered[3],
-    }
-  }
-
-  return null
-}
-
-const renderInline = (value: string): JSX.Element[] => {
-  return [value]
-}
-
-const renderFormattedText = (text: string): JSX.Element[] => {
-  const source = text.trimEnd()
-  if (!source.trim()) return [<p class="empty-copy">Double click to write</p>]
-
-  const blocks: JSX.Element[] = []
-  const lines = source.replace(/\r\n/g, '\n').split('\n')
-  let index = 0
-
-  while (index < lines.length) {
-    const line = lines[index]
-    const trimmed = line.trim()
-
-    if (!trimmed) {
-      blocks.push(<div class="soft-break" />)
-      index += 1
-      continue
-    }
-
-    if (parseListLine(line)) {
-      const listRows: ListLine[] = []
-      while (index < lines.length) {
-        const parsed = parseListLine(lines[index])
-        if (!parsed) break
-        listRows.push(parsed)
-        index += 1
-      }
-
-      blocks.push(
-        <div class="nested-list">
-          {listRows.map((row) => (
-            <div
-              class={`nested-list-row row-${row.kind}${row.done ? ' is-done' : ''}`}
-              style={`--list-indent: ${row.indent};`}
-            >
-              {row.kind === 'task' ? (
-                <span class={row.done ? 'task-box is-checked' : 'task-box'} />
-              ) : (
-                <span class="list-marker">{row.marker}</span>
-              )}
-              <span>{renderInline(row.text)}</span>
-            </div>
-          ))}
-        </div>,
-      )
-      continue
-    }
-
-    blocks.push(<p>{renderInline(trimmed)}</p>)
-    index += 1
-  }
-
-  return blocks
-}
+  target instanceof HTMLElement && (target.tagName === 'INPUT' || target.isContentEditable)
 
 const typeLabel = (type: ItemType) =>
   ({
@@ -345,6 +412,7 @@ const typeLabel = (type: ItemType) =>
     rect: 'Rectangle',
     ellipse: 'Circle',
     diamond: 'Diamond',
+    path: 'Stroke',
   })[type]
 
 const ToolIcon = (props: { tool: Tool }) => {
@@ -367,6 +435,24 @@ const ToolIcon = (props: { tool: Tool }) => {
     )
   }
 
+  if (props.tool === 'pencil') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m5 19 1.2-4.6L15 5.6l3.4 3.4-8.9 8.8Z" />
+        <path d="m13.8 6.8 3.4 3.4" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'eraser') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m7.4 14.7 6.8-6.8a2.4 2.4 0 0 1 3.4 0l1.5 1.5a2.4 2.4 0 0 1 0 3.4l-4.2 4.2H9.7a3 3 0 0 1-2.3-.9 1.7 1.7 0 0 1 0-1.4Z" />
+        <path d="M4 18h15" />
+      </svg>
+    )
+  }
+
   if (props.tool === 'ellipse') {
     return (
       <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -383,10 +469,10 @@ const ToolIcon = (props: { tool: Tool }) => {
     )
   }
 
-  if (props.tool === 'rect' || props.tool === 'note') {
+  if (props.tool === 'rect') {
     return (
       <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="5" y="6" width="14" height="12" rx={props.tool === 'note' ? '3' : '1.5'} />
+        <rect x="5" y="6" width="14" height="12" rx="1.5" />
       </svg>
     )
   }
@@ -400,15 +486,52 @@ const ToolIcon = (props: { tool: Tool }) => {
   )
 }
 
+const PathStroke = (props: { item: PathCanvasItem }) => {
+  const isDot = createMemo(() => {
+    const first = props.item.points[0]
+    return props.item.points.every((point) => distance(point, first) < 0.4)
+  })
+
+  const points = createMemo(() => props.item.points.map((point) => `${point.x},${point.y}`).join(' '))
+  const center = createMemo(() => props.item.points[0])
+
+  return (
+    <svg
+      class="path-item"
+      width={props.item.w}
+      height={props.item.h}
+      viewBox={`0 0 ${props.item.w} ${props.item.h}`}
+      aria-hidden="true"
+    >
+      <Show
+        when={!isDot()}
+        fallback={
+          <circle
+            cx={center().x}
+            cy={center().y}
+            r={Math.max(strokeWidthPx(props.item.strokeWidth) * 0.75, 1.5)}
+            fill={props.item.stroke}
+          />
+        }
+      >
+        <polyline points={points()} />
+      </Show>
+    </svg>
+  )
+}
+
 function App() {
   const saved = loadNotebook()
   const [items, setItems] = createSignal<CanvasItem[]>(saved.items)
   const [view, setView] = createSignal<Viewport>(saved.view)
   const [workspaceMode, setWorkspaceMode] = createSignal<WorkspaceMode>('local')
+  const [themeMode, setThemeMode] = createSignal<ThemeMode>(loadThemeMode())
+  const [systemTheme, setSystemTheme] = createSignal<ResolvedTheme>(getSystemTheme())
   const [tool, setTool] = createSignal<Tool>('selection')
   const [selectedIds, setSelectedIds] = createSignal<string[]>([])
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [interaction, setInteraction] = createSignal<Interaction | null>(null)
+  const [erasePreviewIds, setErasePreviewIds] = createSignal<string[]>([])
   const [saveState, setSaveState] = createSignal('autosaved locally')
   const [shareState, setShareState] = createSignal('start with pnpm share on your LAN')
   const shareClientId = createId()
@@ -419,7 +542,6 @@ function App() {
   let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
   const itemContentRefs = new Map<string, HTMLDivElement>()
-  const editorRefs = new Map<string, HTMLTextAreaElement>()
 
   const selectedItems = createMemo(() => {
     const ids = new Set(selectedIds())
@@ -443,10 +565,45 @@ function App() {
 
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   })
+  const selectedTextItems = createMemo(() => selectedItems().filter(isTextCanvasItem))
+  const selectedPathItems = createMemo(() => selectedItems().filter(isPathItem))
+  const erasePreviewIdSet = createMemo(() => new Set(erasePreviewIds()))
+  const resolvedTheme = createMemo<ResolvedTheme>(() => resolveTheme(themeMode(), systemTheme()))
+  const draftShape = createMemo(() => {
+    const active = interaction()
+    if (active?.kind !== 'createShape') return null
+
+    const box = shapeBoxFromDrag(active.type, active.startWorld, active.currentWorld)
+    if (!isShapeBoxVisible(box)) return null
+
+    return {
+      id: 'shape-draft',
+      type: active.type,
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      content: createEmptyContent(),
+      ...createDefaultItemStyle(active.type),
+    } as CanvasItem
+  })
+  const canEditText = createMemo(() => selectedTextItems().length === selectedItems().length && selectedItems().length > 0)
+  const canChangeFill = createMemo(() => selectedTextItems().length > 0)
+  const canResize = createMemo(() => selectedItem() && !isPathItem(selectedItem()!))
+  const inspectorStroke = createMemo(() => selectedItems()[0]?.stroke ?? '#1f1f1f')
+  const inspectorFill = createMemo(() => selectedTextItems()[0]?.color ?? 'transparent')
+  const inspectorStrokeWidth = createMemo<StrokeWidth>(() => selectedItems()[0]?.strokeWidth ?? 'medium')
+  const inspectorStrokeStyle = createMemo<StrokeStyle>(() => selectedItems()[0]?.strokeStyle ?? 'solid')
+  const inspectorFontFamily = createMemo<FontFamily>(() => selectedTextItems()[0]?.fontFamily ?? 'hand')
+  const inspectorFontSize = createMemo<FontSize>(() => selectedTextItems()[0]?.fontSize ?? 'md')
+  const inspectorTextAlign = createMemo<TextAlign>(() => selectedTextItems()[0]?.textAlign ?? 'left')
   const stageClass = createMemo(() =>
     [
       'canvas-stage',
-      tool() === 'pan' ? 'tool-pan' : 'tool-selection',
+      `tool-${tool()}`,
+      tool() === 'pan' ? 'tool-pan' : '',
+      tool() === 'pencil' ? 'tool-pencil' : '',
+      tool() === 'eraser' ? 'tool-eraser' : '',
       interaction()?.kind === 'pan' ? 'is-panning' : '',
       interaction()?.kind === 'selectArea' ? 'is-selecting' : '',
     ]
@@ -458,7 +615,7 @@ function App() {
     if (workspaceMode() !== 'local' || applyingRemote) return
 
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: items(), view: view() }))
+      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify({ items: items(), view: view() }))
       setSaveState('autosaved locally')
     } catch {
       setSaveState('storage unavailable')
@@ -485,39 +642,75 @@ function App() {
     if (filteredIds.length !== selectedIds().length) setSelectedIds(filteredIds)
   })
 
+  createEffect(() => {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, themeMode())
+    } catch {
+      // Ignore theme persistence failures and continue with in-memory state.
+    }
+  })
+
+  createEffect(() => {
+    applyTheme(themeMode(), systemTheme())
+  })
+
+  createEffect(() => {
+    if (tool() !== 'eraser') setErasePreviewIds([])
+  })
+
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
-    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+    setItems((current) =>
+      current.map((item): CanvasItem => (item.id === id ? ({ ...item, ...patch } as CanvasItem) : item)),
+    )
   }
+
+  const updateSelectedItemsWhere = (predicate: (item: CanvasItem) => boolean, patch: Partial<CanvasItem>) => {
+    const ids = new Set(selectedIds())
+    setItems((current) =>
+      current.map((item): CanvasItem =>
+        ids.has(item.id) && predicate(item) ? ({ ...item, ...patch } as CanvasItem) : item,
+      ),
+    )
+  }
+
+  const updateSelectedItems = (patch: Partial<CanvasItem>) => updateSelectedItemsWhere(() => true, patch)
 
   const growItemHeight = (id: string, height: number) => {
     setItems((current) =>
-      current.map((item) => {
-        if (item.id !== id || height <= item.h + 2) return item
+      current.map((item): CanvasItem => {
+        if (item.id !== id || isPathItem(item) || !isAutoHeightItem(item) || height <= item.h + 2) return item
         return { ...item, h: Math.ceil(height) }
       }),
     )
   }
 
   const fitItemHeight = (id: string) => {
-    const editor = editorRefs.get(id)
-    if (editor) {
-      const content = itemContentRefs.get(id)
-      const padding = content ? verticalPadding(content) : 32
-      growItemHeight(id, editor.scrollHeight + padding + 8)
-      return
-    }
+    const item = items().find((entry) => entry.id === id)
+    if (!item || isPathItem(item) || !isAutoHeightItem(item)) return
 
     const content = itemContentRefs.get(id)
-    if (content) growItemHeight(id, content.scrollHeight + 4)
+    if (content) growItemHeight(id, renderedEditorHeight(content) + verticalPadding(content) + 8)
   }
 
   const scheduleFitItemHeight = (id: string) => {
     requestAnimationFrame(() => fitItemHeight(id))
   }
 
-  const updateSelectedItems = (patch: Partial<CanvasItem>) => {
-    const ids = new Set(selectedIds())
-    setItems((current) => current.map((item) => (ids.has(item.id) ? { ...item, ...patch } : item)))
+  const collectEraseHits = (from: Point, to: Point) => {
+    const radius = 14 / view().zoom
+
+    return items()
+      .filter((item) => segmentHitsBox(from, to, itemBox(item), radius))
+      .map((item) => item.id)
+  }
+
+  const commitErasePreview = () => {
+    const ids = erasePreviewIds()
+    if (!ids.length) return
+
+    const eraseSet = new Set(ids)
+    setItems((current) => current.filter((item) => !eraseSet.has(item.id)))
+    setErasePreviewIds([])
   }
 
   const selectItemsInBox = (box: SelectionBox, previousIds: string[]) => {
@@ -567,6 +760,7 @@ function App() {
     setView(payload.view)
     setSelectedIds([])
     setEditingId(null)
+    setErasePreviewIds([])
     setInteraction(null)
     queueMicrotask(() => {
       applyingRemote = false
@@ -603,10 +797,12 @@ function App() {
       const result = await fetchSharedState()
       setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
 
-      if (result.payload && result.revision > remoteRevision) {
+      const payload = result.payload ? normalizeStoredNotebook(result.payload) : null
+
+      if (payload && result.revision > remoteRevision) {
         remoteRevision = result.revision
-        lastSharedSignature = stableStringify(result.payload)
-        applyRemoteNotebook(result.payload)
+        lastSharedSignature = stableStringify(payload)
+        applyRemoteNotebook(payload)
       }
     } catch {
       setShareState('share server unavailable')
@@ -622,7 +818,9 @@ function App() {
     setShareState('connecting to local net share...')
     try {
       const result = await fetchSharedState()
-      const payload = result.payload ?? { items: [], view: defaultView() }
+      const payload = result.payload
+        ? normalizeStoredNotebook(result.payload) ?? { items: [], view: defaultView() }
+        : { items: [], view: defaultView() }
 
       remoteRevision = result.revision
       lastSharedSignature = stableStringify(payload)
@@ -689,38 +887,76 @@ function App() {
     zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, view().zoom * factor)
   }
 
-  const createItem = (nextTool: ItemType, point: Point): CanvasItem => {
-    const index = items().length
-    const base = {
-      id: createId(),
-      type: nextTool,
-      x: point.x,
-      y: point.y,
-      text: '',
-      color: PALETTE[index % PALETTE.length],
-    }
+  const createTextItem = (point: Point): CanvasItem => ({
+    id: createId(),
+    type: 'text',
+    x: point.x - 20,
+    y: point.y - 20,
+    w: 320,
+    h: 120,
+    content: createEmptyContent(),
+    ...createDefaultItemStyle('text'),
+  })
 
-    if (nextTool === 'text') {
-      return { ...base, x: point.x - 20, y: point.y - 20, w: 320, h: 120, color: 'transparent' }
+  const createShapeItem = (type: ShapeTool, startWorld: Point, endWorld: Point): CanvasItem | null => {
+    const box = shapeBoxFromDrag(type, startWorld, endWorld)
+    if (!isShapeBoxVisible(box)) return null
+
+    return {
+      id: createId(),
+      type,
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      content: createEmptyContent(),
+      ...createDefaultItemStyle(type),
     }
-    if (nextTool === 'note') {
-      return { ...base, x: point.x - 140, y: point.y - 95, w: 280, h: 210 }
-    }
-    if (nextTool === 'rect') {
-      return { ...base, x: point.x - 105, y: point.y - 65, w: 210, h: 130, color: '#d8f5dd' }
-    }
-    if (nextTool === 'ellipse') {
-      return { ...base, x: point.x - 110, y: point.y - 75, w: 220, h: 150, color: '#d7f2ff' }
-    }
-    return { ...base, x: point.x - 90, y: point.y - 90, w: 180, h: 180, color: '#ffd8df' }
   }
 
-  const placeItem = (nextTool: ItemType, point: Point) => {
-    const item = createItem(nextTool, point)
+  const placeTextItem = (point: Point) => {
+    const item = createTextItem(point)
     setItems((current) => [...current, item])
     setSelectedIds([item.id])
     setTool('selection')
-    if (nextTool === 'text' || nextTool === 'note') setEditingId(item.id)
+    setEditingId(item.id)
+  }
+
+  const startDraw = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    const point = screenToWorld(event.clientX, event.clientY)
+    const style = createDefaultItemStyle('path')
+    const item = createPathItemFromPoints(createId(), [point], style)
+    setItems((current) => [...current, item])
+    setSelectedIds([item.id])
+    setInteraction({
+      kind: 'draw',
+      pointerId: event.pointerId,
+      id: item.id,
+      points: [point],
+      style,
+    })
+  }
+
+  const startShapeCreation = (event: PointerEvent & { currentTarget: HTMLDivElement }, type: ShapeTool) => {
+    const point = screenToWorld(event.clientX, event.clientY)
+    setSelectedIds([])
+    setInteraction({
+      kind: 'createShape',
+      pointerId: event.pointerId,
+      type,
+      startWorld: point,
+      currentWorld: point,
+    })
+  }
+
+  const startErase = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    const point = screenToWorld(event.clientX, event.clientY)
+    setErasePreviewIds(collectEraseHits(point, point))
+    setInteraction({
+      kind: 'erase',
+      pointerId: event.pointerId,
+      lastWorld: point,
+    })
   }
 
   const deleteSelected = () => {
@@ -729,6 +965,7 @@ function App() {
     setItems((current) => current.filter((item) => !ids.has(item.id)))
     setSelectedIds([])
     setEditingId(null)
+    setErasePreviewIds([])
   }
 
   const duplicateSelected = () => {
@@ -754,15 +991,36 @@ function App() {
     setItems([])
     setSelectedIds([])
     setEditingId(null)
+    setErasePreviewIds([])
   }
 
   const handleStagePointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     if (event.button !== 0 || isEditableTarget(event.target)) return
+    setErasePreviewIds([])
 
     const currentTool = tool()
 
-    if (isItemTool(currentTool)) {
-      placeItem(currentTool, screenToWorld(event.clientX, event.clientY))
+    if (currentTool === 'pencil') {
+      setEditingId(null)
+      startDraw(event)
+      return
+    }
+
+    if (currentTool === 'eraser') {
+      setEditingId(null)
+      setSelectedIds([])
+      startErase(event)
+      return
+    }
+
+    if (currentTool === 'text') {
+      placeTextItem(screenToWorld(event.clientX, event.clientY))
+      return
+    }
+
+    if (isShapeTool(currentTool)) {
+      setEditingId(null)
+      startShapeCreation(event, currentTool)
       return
     }
 
@@ -828,6 +1086,7 @@ function App() {
     event: PointerEvent & { currentTarget: HTMLButtonElement },
     item: CanvasItem,
   ) => {
+    if (isPathItem(item)) return
     event.stopPropagation()
     setSelectedIds([item.id])
     setInteraction({
@@ -854,6 +1113,28 @@ function App() {
     }
 
     const world = screenToWorld(event.clientX, event.clientY)
+
+    if (active.kind === 'draw') {
+      const lastPoint = active.points[active.points.length - 1]
+      if (distance(lastPoint, world) < 3 / view().zoom) return
+
+      const nextPoints = [...active.points, world]
+      updateItem(active.id, createPathItemFromPoints(active.id, nextPoints, active.style))
+      setInteraction({ ...active, points: nextPoints })
+      return
+    }
+
+    if (active.kind === 'createShape') {
+      setInteraction({ ...active, currentWorld: world })
+      return
+    }
+
+    if (active.kind === 'erase') {
+      const hitIds = collectEraseHits(active.lastWorld, world)
+      setErasePreviewIds((current) => unique([...current, ...hitIds]))
+      setInteraction({ ...active, lastWorld: world })
+      return
+    }
 
     if (active.kind === 'drag') {
       const originMap = new Map(active.origins.map((origin) => [origin.id, origin]))
@@ -890,12 +1171,26 @@ function App() {
     const active = interaction()
     if (active?.pointerId !== event.pointerId) return
 
+    if (active.kind === 'createShape') {
+      const item = createShapeItem(active.type, active.startWorld, active.currentWorld)
+      if (item) {
+        setItems((current) => [...current, item])
+        setSelectedIds([item.id])
+        setTool('selection')
+        setEditingId(null)
+      }
+      setInteraction(null)
+      return
+    }
+
     if (active.kind === 'selectArea') {
       const box = normalizeBox(active.startWorld, active.currentWorld)
       if (box.w < 4 && box.h < 4) {
         setSelectedIds(active.additive ? active.previousIds : [])
       }
     }
+
+    if (active.kind === 'erase') commitErasePreview()
 
     setInteraction(null)
   }
@@ -926,6 +1221,8 @@ function App() {
       setTool('selection')
       setSelectedIds([])
       setEditingId(null)
+      setErasePreviewIds([])
+      setInteraction(null)
       return
     }
 
@@ -959,98 +1256,38 @@ function App() {
     if (nextTool) setTool(nextTool.id)
   }
 
-  const handleEditorKeyDown = (
-    event: KeyboardEvent & { currentTarget: HTMLTextAreaElement },
-    item: CanvasItem,
-  ) => {
-    if (event.key === 'Tab') {
-      event.preventDefault()
-
-      const editor = event.currentTarget
-      const value = editor.value
-      const selectionStart = editor.selectionStart
-      const selectionEnd = editor.selectionEnd
-      const blockStart = value.lastIndexOf('\n', selectionStart - 1) + 1
-      const nextBreak = value.indexOf('\n', selectionEnd)
-      const blockEnd = nextBreak === -1 ? value.length : nextBreak
-      const block = value.slice(blockStart, blockEnd)
-      const lines = block.split('\n')
-      const updatedLines = lines.map((line) => {
-        if (!event.shiftKey) return `  ${line}`
-        if (line.startsWith('  ')) return line.slice(2)
-        if (line.startsWith('\t')) return line.slice(1)
-        if (line.startsWith(' ')) return line.slice(1)
-        return line
-      })
-      const updatedBlock = updatedLines.join('\n')
-      const nextText = `${value.slice(0, blockStart)}${updatedBlock}${value.slice(blockEnd)}`
-
-      updateItem(item.id, { text: nextText })
-      scheduleFitItemHeight(item.id)
-      requestAnimationFrame(() => {
-        if (selectionStart === selectionEnd) {
-          const cursorDelta = updatedLines[0].length - lines[0].length
-          const nextCursor = Math.max(blockStart, selectionStart + cursorDelta)
-          editor.selectionStart = nextCursor
-          editor.selectionEnd = nextCursor
-          return
-        }
-
-        editor.selectionStart = blockStart
-        editor.selectionEnd = blockStart + updatedBlock.length
-      })
-      return
-    }
-
-    if (event.key !== 'Enter' || event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) return
-
-    const editor = event.currentTarget
-    const cursor = editor.selectionStart
-    const value = editor.value
-    const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-    const line = value.slice(lineStart, cursor)
-    const emptyListItem = line.match(/^(\s*(?:[-*]|\d+[.)])(?:\s+\[(?: |x|X)\])?\s*)$/)
-
-    if (emptyListItem) {
-      event.preventDefault()
-      const nextText = `${value.slice(0, lineStart)}${value.slice(cursor)}`
-      updateItem(item.id, { text: nextText })
-      scheduleFitItemHeight(item.id)
-      requestAnimationFrame(() => {
-        editor.selectionStart = lineStart
-        editor.selectionEnd = lineStart
-      })
-      return
-    }
-
-    const taskPrefix = line.match(/^(\s*[-*]\s+\[(?: |x|X)\]\s+)/)
-    const bulletPrefix = line.match(/^(\s*[-*]\s+)/)
-    const orderedPrefix = line.match(/^(\s*)(\d+)([.)]\s+)/)
-    const nextPrefix = taskPrefix
-      ? taskPrefix[1].replace(/\[(?:x|X)\]/, '[ ]')
-      : orderedPrefix
-        ? `${orderedPrefix[1]}${Number(orderedPrefix[2]) + 1}${orderedPrefix[3]}`
-        : bulletPrefix?.[1]
-
-    if (!nextPrefix) return
-
-    event.preventDefault()
-    const inserted = `\n${nextPrefix}`
-    const nextText = `${value.slice(0, cursor)}${inserted}${value.slice(cursor)}`
-    updateItem(item.id, { text: nextText })
-    scheduleFitItemHeight(item.id)
-    requestAnimationFrame(() => {
-      const nextCursor = cursor + inserted.length
-      editor.selectionStart = nextCursor
-      editor.selectionEnd = nextCursor
-    })
-  }
+  const itemStyle = (item: CanvasItem) =>
+    [
+      `transform: translate3d(${item.x}px, ${item.y}px, 0)`,
+      `width: ${item.w}px`,
+      `min-height: ${item.h}px`,
+      `height: ${item.h}px`,
+      `--item-fill: ${item.color}`,
+      `--item-stroke: ${item.stroke}`,
+      `--item-stroke-width: ${strokeWidthPx(item.strokeWidth)}px`,
+      `--item-stroke-style: ${item.strokeStyle}`,
+      `--item-stroke-dash: ${strokeDasharray(item.strokeStyle)}`,
+      `--item-font-size: ${fontSizePx(item.fontSize)}px`,
+      `--item-font-family: ${fontFamilyValue(item.fontFamily)}`,
+      `--item-text-align: ${item.textAlign}`,
+    ].join('; ')
 
   onMount(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleThemeChange = (event: MediaQueryListEvent) => {
+      setSystemTheme(event.matches ? 'dark' : 'light')
+    }
+
+    setSystemTheme(media.matches ? 'dark' : 'light')
+    media.addEventListener('change', handleThemeChange)
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('pagehide', sendShareLeave)
+
+    onCleanup(() => {
+      media.removeEventListener('change', handleThemeChange)
+    })
   })
 
   onCleanup(() => {
@@ -1141,15 +1378,15 @@ function App() {
         </div>
       </section>
 
-      <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item">
+      <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item settings">
         <Show
           when={selectedCount() > 0}
           fallback={
             <>
-              <p class="eyebrow">Format hints</p>
-              <h1>Nested lists</h1>
+              <p class="eyebrow">Tools</p>
+              <h1>Canvas styles</h1>
               <p class="hint-copy">
-                V: selection, H: pan. Drag empty space in selection mode to select an area.
+                R / O / D: drag to create shapes. P: pencil, E: eraser.
               </p>
             </>
           }
@@ -1157,33 +1394,167 @@ function App() {
           <>
             <p class="eyebrow">Selected</p>
             <h1>{selectedItem() ? typeLabel(selectedItem()!.type) : `${selectedCount()} items`}</h1>
-            <label class="color-control">
-              <span>Color</span>
-              <input
-                type="color"
-                value={selectedItems()[0]?.color ?? '#fff7c7'}
-                onInput={(event) => updateSelectedItems({ color: event.currentTarget.value })}
-              />
-            </label>
-            <p class="hint-copy">Drag selected items to move together. Resize is available for one item.</p>
+
+            <div class="style-card">
+              <div class="style-card-header">
+                <strong>Stroke</strong>
+              </div>
+              <div class="style-swatch-row">
+                <For each={STROKE_OPTIONS}>
+                  {(option) => (
+                    <button
+                      type="button"
+                      class={inspectorStroke() === option.value ? 'style-swatch is-active' : 'style-swatch'}
+                      title={option.label}
+                      onClick={() => updateSelectedItems({ stroke: option.value })}
+                    >
+                      <span style={`background:${option.value};`} />
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="style-chip-row">
+                <For each={STROKE_WIDTH_OPTIONS}>
+                  {(option) => (
+                    <button
+                      type="button"
+                      class={inspectorStrokeWidth() === option.value ? 'style-chip is-active' : 'style-chip'}
+                      onClick={() => updateSelectedItems({ strokeWidth: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="style-chip-row">
+                <For each={STROKE_STYLE_OPTIONS}>
+                  {(option) => (
+                    <button
+                      type="button"
+                      class={inspectorStrokeStyle() === option.value ? 'style-chip is-active' : 'style-chip'}
+                      onClick={() => updateSelectedItems({ strokeStyle: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <Show when={canChangeFill()}>
+              <div class="style-card">
+                <div class="style-card-header">
+                  <strong>Background</strong>
+                </div>
+                <div class="style-swatch-row">
+                  <For each={FILL_OPTIONS}>
+                    {(option) => (
+                      <button
+                        type="button"
+                        class={inspectorFill() === option.value ? 'style-swatch is-active' : 'style-swatch'}
+                        title={option.label}
+                        onClick={() => updateSelectedItemsWhere(isTextCanvasItem, { color: option.value })}
+                      >
+                        <span
+                          class={option.value === 'transparent' ? 'swatch-clear' : ''}
+                          style={option.value === 'transparent' ? undefined : `background:${option.value};`}
+                        />
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+            </Show>
+
+            <Show when={canEditText()}>
+              <div class="style-card">
+                <div class="style-card-header">
+                  <strong>Text</strong>
+                </div>
+                <div class="style-chip-row">
+                  <For each={FONT_FAMILY_OPTIONS}>
+                    {(option) => (
+                      <button
+                        type="button"
+                        class={inspectorFontFamily() === option.value ? 'style-chip is-active' : 'style-chip'}
+                        onClick={() => updateSelectedItemsWhere(isTextCanvasItem, { fontFamily: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <div class="style-chip-row">
+                  <For each={FONT_SIZE_OPTIONS}>
+                    {(option) => (
+                      <button
+                        type="button"
+                        class={inspectorFontSize() === option.value ? 'style-chip is-active' : 'style-chip'}
+                        onClick={() => updateSelectedItemsWhere(isTextCanvasItem, { fontSize: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <div class="style-chip-row">
+                  <For each={TEXT_ALIGN_OPTIONS}>
+                    {(option) => (
+                      <button
+                        type="button"
+                        class={inspectorTextAlign() === option.value ? 'style-chip is-active' : 'style-chip'}
+                        onClick={() => updateSelectedItemsWhere(isTextCanvasItem, { textAlign: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+            </Show>
+
+            <p class="hint-copy">
+              {selectedPathItems().length
+                ? 'Paths support stroke controls. Text options apply to text and shape items.'
+                : 'Double click a text-capable item to edit. Shape defaults are black stroke on transparent fill.'}
+            </p>
           </>
         </Show>
       </section>
 
       <section class="zoom-controls" aria-label="Zoom and view controls" onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" onClick={() => zoomFromCenter(0.88)} aria-label="Zoom out">
-          -
-        </button>
-        <span>{zoomLabel()}</span>
-        <button type="button" onClick={() => zoomFromCenter(1.12)} aria-label="Zoom in">
-          +
-        </button>
-        <button type="button" onClick={resetView}>
-          Reset view
-        </button>
-        <button type="button" onClick={clearBoard}>
-          Clear
-        </button>
+        <div class="zoom-row">
+          <button type="button" onClick={() => zoomFromCenter(0.88)} aria-label="Zoom out">
+            -
+          </button>
+          <span>{zoomLabel()}</span>
+          <button type="button" onClick={() => zoomFromCenter(1.12)} aria-label="Zoom in">
+            +
+          </button>
+          <button type="button" onClick={resetView}>
+            Reset view
+          </button>
+          <button type="button" onClick={clearBoard}>
+            Clear
+          </button>
+        </div>
+        <div class="theme-row" aria-label="Theme controls">
+          <span class="theme-label">Theme</span>
+          <For each={THEME_OPTIONS}>
+            {(option) => (
+              <button
+                type="button"
+                class={themeMode() === option.value ? 'theme-button is-active' : 'theme-button'}
+                title={
+                  option.value === 'system' ? `System (${resolvedTheme()})` : option.label
+                }
+                onClick={() => setThemeMode(option.value)}
+              >
+                {option.label}
+              </button>
+            )}
+          </For>
+        </div>
       </section>
 
       <div
@@ -1196,74 +1567,82 @@ function App() {
           class="canvas-world"
           style={`transform: translate3d(${view().x}px, ${view().y}px, 0) scale(${view().zoom});`}
         >
-          <Index each={items()}>
-            {(item) => (
-              <div
-                class={`canvas-item item-${item().type}${
-                  selectedIds().includes(item().id) ? ' is-selected' : ''
-                }${editingId() === item().id ? ' is-editing' : ''}`}
-                style={`transform: translate3d(${item().x}px, ${item().y}px, 0); width: ${item().w}px; min-height: ${item().h}px; height: ${editingId() === item().id ? 'auto' : `${item().h}px`}; --item-color: ${item().color};`}
-                onPointerDown={(event) => handleItemPointerDown(event, item())}
-                onDblClick={(event) => {
-                  event.stopPropagation()
-                  setSelectedIds([item().id])
-                  setEditingId(item().id)
-                }}
-              >
-                <Show when={item().type === 'diamond'}>
-                  <div class="diamond-fill" />
-                </Show>
+          <For each={items()}>
+            {(item) => {
+              const isSelected = () => selectedIds().includes(item.id)
+              const isEditing = () => editingId() === item.id
+              const style = () => itemStyle(item)
 
+              return (
                 <div
-                  ref={(element) => {
-                    itemContentRefs.set(item().id, element)
-                    scheduleFitItemHeight(item().id)
+                  class={`canvas-item item-${item.type}${isSelected() ? ' is-selected' : ''}${isEditing() ? ' is-editing' : ''}${erasePreviewIdSet().has(item.id) ? ' is-erase-preview' : ''}`}
+                  style={style()}
+                  onPointerDown={(event) => handleItemPointerDown(event, item)}
+                  onDblClick={(event) => {
+                    if (isPathItem(item)) return
+                    event.stopPropagation()
+                    setSelectedIds([item.id])
+                    setEditingId(item.id)
                   }}
-                  class={editingId() === item().id ? 'item-content is-editing-content' : 'item-content'}
                 >
+                  <Show when={item.type === 'diamond'}>
+                    <div class="diamond-fill" />
+                  </Show>
+
                   <Show
-                    when={editingId() === item().id}
-                    fallback={<div class="formatted-text">{renderFormattedText(item().text)}</div>}
+                    when={isPathItem(item)}
+                    fallback={
+                      <div
+                        ref={(element) => {
+                          itemContentRefs.set(item.id, element)
+                          scheduleFitItemHeight(item.id)
+                        }}
+                        class="item-content"
+                      >
+                        <RichTextItem
+                          content={isTextCanvasItem(item) ? item.content : createEmptyContent()}
+                          editable={isEditing()}
+                          placeholder="Double click to write"
+                          onContentChange={(content) => {
+                            if (!isTextCanvasItem(item)) return
+                            updateItem(item.id, { content })
+                          }}
+                          onLayoutChange={() => {
+                            scheduleFitItemHeight(item.id)
+                          }}
+                          onBlur={() => {
+                            scheduleFitItemHeight(item.id)
+                            setEditingId((current) => (current === item.id ? null : current))
+                          }}
+                        />
+                      </div>
+                    }
                   >
-                    <textarea
-                      ref={(element) => {
-                        editorRefs.set(item().id, element)
-                        requestAnimationFrame(() => {
-                          element.focus()
-                          element.setSelectionRange(element.value.length, element.value.length)
-                          fitItemHeight(item().id)
-                        })
-                      }}
-                      class="note-editor"
-                      aria-label="Nested bullet editor"
-                      value={item().text}
-                      spellcheck={false}
-                      onInput={(event) => {
-                        updateItem(item().id, { text: event.currentTarget.value })
-                        scheduleFitItemHeight(item().id)
-                      }}
-                      onKeyDown={(event) => handleEditorKeyDown(event, item())}
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onBlur={() => {
-                        editorRefs.delete(item().id)
-                        scheduleFitItemHeight(item().id)
-                        setEditingId((current) => (current === item().id ? null : current))
-                      }}
+                    <PathStroke item={item as PathCanvasItem} />
+                  </Show>
+
+                  <Show when={selectedIds().length === 1 && selectedIds()[0] === item.id && !isEditing() && canResize()}>
+                    <button
+                      class="resize-handle"
+                      type="button"
+                      aria-label="Resize item"
+                      onPointerDown={(event) => handleResizePointerDown(event, item)}
                     />
                   </Show>
                 </div>
-
-                <Show when={selectedIds().length === 1 && selectedIds()[0] === item().id && editingId() !== item().id}>
-                  <button
-                    class="resize-handle"
-                    type="button"
-                    aria-label="Resize item"
-                    onPointerDown={(event) => handleResizePointerDown(event, item())}
-                  />
+              )
+            }}
+          </For>
+          <Show when={draftShape()}>
+            {(item) => (
+              <div class={`canvas-item item-${item().type} is-draft`} style={itemStyle(item())}>
+                <Show when={item().type === 'diamond'}>
+                  <div class="diamond-fill" />
                 </Show>
+                <div class="item-content" />
               </div>
             )}
-          </Index>
+          </Show>
           <Show when={selectedBounds()}>
             {(box) => (
               <div

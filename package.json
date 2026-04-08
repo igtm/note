@@ -6,16 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "share": "pnpm build && node scripts/localnet-share.mjs"
   },
   "dependencies": {
+    "@tiptap/core": "^3.22.2",
+    "@tiptap/extension-placeholder": "^3.22.2",
+    "@tiptap/extension-task-item": "^3.22.2",
+    "@tiptap/extension-task-list": "^3.22.2",
+    "@tiptap/pm": "^3.22.2",
+    "@tiptap/starter-kit": "^3.22.2",
     "solid-js": "^1.9.12"
   },
   "devDependencies": {
     "@types/node": "^24.12.2",
     "typescript": "~6.0.2",
     "vite": "^8.0.4",
-    "vite-plugin-solid": "^2.11.12"
+    "vite-plugin-solid": "^2.11.12",
+    "vitest": "^4.1.3"
   }
 }
