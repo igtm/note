@@ -3,13 +3,10 @@ import { toBlob } from 'html-to-image'
 import './App.css'
 import {
   EXPORT_PNG_TEXT_KEY,
-  EXPORT_SVG_METADATA_ID,
   buildExportSvg,
   encodeEmbeddedExportPayload,
   getItemBounds,
   injectPngTextChunk,
-  parseEmbeddedExportPayload,
-  readPngTextChunk,
 } from './exportImage'
 import { RichTextItem } from './RichTextItem'
 import {
@@ -41,7 +38,14 @@ import {
   type ResolvedTheme,
   type ThemeMode,
 } from './theme'
-import { NOTE_FILE_MIME, NOTE_FILE_NAME, parseNoteFile, serializeNoteFile } from './noteFile'
+import {
+  NOTE_FILE_EXTENSION,
+  NOTE_FILE_MIME,
+  NOTE_FILE_NAME,
+  parseNoteFile,
+  readEmbeddedItemsFromFile,
+  serializeNoteFile,
+} from './noteFile'
 
 type ShapeTool = 'rect' | 'ellipse' | 'diamond'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
@@ -830,36 +834,6 @@ function App() {
     }
   }
 
-  const parseEmbeddedItems = (encoded: string): CanvasItem[] | null => {
-    const parsed = parseEmbeddedExportPayload(encoded)
-    if (!parsed || typeof parsed !== 'object' || !('items' in parsed)) return null
-    const normalized = normalizeStoredNotebook({
-      items: (parsed as { items: unknown }).items,
-      view: defaultView(),
-    })
-    return normalized?.items ?? null
-  }
-
-  const readEmbeddedPayloadFromSvg = (source: string) => {
-    if (typeof DOMParser === 'undefined') return null
-    const document = new DOMParser().parseFromString(source, 'image/svg+xml')
-    return document.querySelector(`metadata#${EXPORT_SVG_METADATA_ID}`)?.textContent ?? null
-  }
-
-  const readEmbeddedItemsFromFile = async (file: File) => {
-    if (file.type === 'image/png') {
-      const payload = readPngTextChunk(await file.arrayBuffer(), EXPORT_PNG_TEXT_KEY)
-      return payload ? parseEmbeddedItems(payload) : null
-    }
-
-    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
-      const payload = readEmbeddedPayloadFromSvg(await file.text())
-      return payload ? parseEmbeddedItems(payload) : null
-    }
-
-    return null
-  }
-
   const createImageItemFromFile = async (file: File, index: number): Promise<CanvasItem> => {
     const center = viewportCenterWorld()
     const src = await readFileAsDataUrl(file)
@@ -933,6 +907,26 @@ function App() {
     return true
   }
 
+  const openNotebookFromFile = async (file: File, handle: NoteFileHandle | null) => {
+    const lowerName = file.name.toLowerCase()
+    if (lowerName.endsWith(NOTE_FILE_EXTENSION)) {
+      return openNoteFromText(await file.text(), handle, file.name)
+    }
+
+    const embeddedItems = await readEmbeddedItemsFromFile(file)
+    if (!embeddedItems) {
+      const isImageFile = file.type.startsWith('image/') || lowerName.endsWith('.png') || lowerName.endsWith('.svg')
+      alert(isImageFile ? 'この画像には埋め込みノートデータがありません。' : 'このファイルは読み込めませんでした。')
+      return false
+    }
+
+    closeExportModal()
+    setAppMenuOpen(false)
+    applyLoadedNotebook({ items: embeddedItems, view: defaultView() }, null, file.name)
+    setSaveState(`opened ${file.name}`)
+    return true
+  }
+
   const openNotePicker = async () => {
     setAppMenuOpen(false)
     const pickerWindow = window as OpenFilePickerWindow
@@ -949,7 +943,14 @@ function App() {
           {
             description: 'Pencil Note (*.note)',
             accept: {
-              'application/octet-stream': ['.note'],
+              [NOTE_FILE_MIME]: [NOTE_FILE_EXTENSION],
+            },
+          },
+          {
+            description: 'Embedded export images (*.png, *.svg)',
+            accept: {
+              'image/png': ['.png'],
+              'image/svg+xml': ['.svg'],
             },
           },
         ],
@@ -957,10 +958,10 @@ function App() {
       if (!handle) return
 
       const file = await handle.getFile()
-      openNoteFromText(await file.text(), handle, file.name)
+      await openNotebookFromFile(file, handle)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
-      alert('この .note ファイルは読み込めませんでした。')
+      alert('このファイルは読み込めませんでした。')
     }
   }
 
@@ -1179,9 +1180,9 @@ function App() {
     if (!file) return
 
     try {
-      openNoteFromText(await file.text(), null, file.name)
+      await openNotebookFromFile(file, null)
     } catch {
-      alert('この .note ファイルは読み込めませんでした。')
+      alert('このファイルは読み込めませんでした。')
     }
   }
 
@@ -1733,7 +1734,7 @@ function App() {
         ref={notePickerRef}
         class="file-picker-input"
         type="file"
-        accept=".note"
+        accept=".note,.png,.svg,image/png,image/svg+xml"
         tabIndex={-1}
         aria-hidden="true"
         onChange={handleNotePickerChange}
