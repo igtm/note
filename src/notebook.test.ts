@@ -267,4 +267,43 @@ describe('normalizeStoredNotebook', () => {
       view: { x: 0, y: 0, zoom: 1 },
     })
   })
+
+  it('accepts web embed items and preserves their URL', () => {
+    const notebook = normalizeStoredNotebook({
+      items: [
+        {
+          id: 'embed-1',
+          type: 'webEmbed',
+          x: 64,
+          y: 88,
+          w: 480,
+          h: 320,
+          url: 'https://example.com/embed',
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+
+    expect(notebook).toEqual({
+      items: [
+        {
+          id: 'embed-1',
+          type: 'webEmbed',
+          x: 64,
+          y: 88,
+          w: 480,
+          h: 320,
+          url: 'https://example.com/embed',
+          color: '#f7f1e5',
+          stroke: '#5b4826',
+          strokeWidth: 'thin',
+          strokeStyle: 'solid',
+          fontFamily: 'sans',
+          fontSize: 'md',
+          textAlign: 'left',
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+  })
 })

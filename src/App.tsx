@@ -14,6 +14,7 @@ import {
   getItemBounds,
   injectPngTextChunk,
 } from './exportImage'
+import { getUrlDisplayLabel, normalizeUrlHref } from './links'
 import { RichTextItem } from './RichTextItem'
 import {
   createDefaultItemStyle,
@@ -22,6 +23,7 @@ import {
   isPathItem,
   isSlideItem,
   isTextCanvasItem,
+  isWebEmbedItem,
   normalizeStoredNotebook,
   sortCanvasItemsForRender,
   type CanvasItem,
@@ -36,6 +38,7 @@ import {
   type StrokeWidth,
   type TextAlign,
   type Viewport,
+  type WebEmbedCanvasItem,
 } from './notebook'
 import {
   THEME_OPTIONS,
@@ -58,7 +61,7 @@ import {
 import { collectPresentationSlides, fitSlideToViewport } from './slideshow'
 import { NOTE_TEMPLATE_SECTIONS, type NotebookTemplate } from './templates'
 
-type ShapeTool = 'rect' | 'ellipse' | 'diamond' | 'slide'
+type ShapeTool = 'rect' | 'ellipse' | 'diamond' | 'slide' | 'webEmbed'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
 
 type NoteFileHandle = {
@@ -164,6 +167,7 @@ const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
   { id: 'pencil', label: 'Pencil', shortcut: 'P' },
   { id: 'eraser', label: 'Eraser', shortcut: 'E' },
   { id: 'text', label: 'Text', shortcut: 'T' },
+  { id: 'webEmbed', label: 'Web', shortcut: 'W' },
   { id: 'rect', label: 'Rect', shortcut: 'R' },
   { id: 'slide', label: 'Slide', shortcut: 'L' },
   { id: 'ellipse', label: 'Circle', shortcut: 'O' },
@@ -217,7 +221,8 @@ const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 const unique = (values: string[]) => [...new Set(values)]
 
-const isShapeTool = (value: Tool): value is ShapeTool => ['rect', 'ellipse', 'diamond', 'slide'].includes(value)
+const isShapeTool = (value: Tool): value is ShapeTool =>
+  ['rect', 'ellipse', 'diamond', 'slide', 'webEmbed'].includes(value)
 
 const strokeWidthPx = (value: StrokeWidth) =>
   ({
@@ -436,7 +441,7 @@ const loadNotebook = (): SavedNotebook => {
 const isEditableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === 'INPUT' || target.isContentEditable)
 
-const isFillableItem = (item: CanvasItem) => !isPathItem(item) && !isImageItem(item)
+const isFillableItem = (item: CanvasItem) => !isPathItem(item) && !isImageItem(item) && !isWebEmbedItem(item)
 
 const typeLabel = (type: ItemType) =>
   ({
@@ -446,6 +451,7 @@ const typeLabel = (type: ItemType) =>
     ellipse: 'Circle',
     diamond: 'Diamond',
     slide: 'Slide frame',
+    webEmbed: 'Web embed',
     path: 'Stroke',
     image: 'Image',
   })[type]
@@ -522,6 +528,17 @@ const ToolIcon = (props: { tool: Tool }) => {
     )
   }
 
+  if (props.tool === 'webEmbed') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="12" rx="2" />
+        <path d="M8.2 11.1h.01" />
+        <path d="M11.9 11.1h3.9" />
+        <path d="M8 19h8" />
+      </svg>
+    )
+  }
+
   return (
     <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 18h12" />
@@ -583,6 +600,8 @@ function App() {
   const [exportModalOpen, setExportModalOpen] = createSignal(false)
   const [slideshowIndex, setSlideshowIndex] = createSignal<number | null>(null)
   const [slideshowRestoreView, setSlideshowRestoreView] = createSignal<Viewport | null>(null)
+  const [laserPointerEnabled, setLaserPointerEnabled] = createSignal(false)
+  const [laserPointer, setLaserPointer] = createSignal<{ x: number; y: number } | null>(null)
   const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
   const [exportIncludeBackground, setExportIncludeBackground] = createSignal(true)
   const [exportDarkMode, setExportDarkMode] = createSignal(false)
@@ -650,6 +669,10 @@ function App() {
   const selectedItem = createMemo(() => (selectedItems().length === 1 ? selectedItems()[0] : undefined))
   const selectedCount = createMemo(() => selectedItems().length)
   const selectedFillItems = createMemo(() => selectedItems().filter(isFillableItem))
+  const selectedWebEmbedItem = createMemo<WebEmbedCanvasItem | null>(() => {
+    const current = selectedItem()
+    return current && isWebEmbedItem(current) ? current : null
+  })
   const zoomLabel = createMemo(() => `${Math.round(view().zoom * 100)}%`)
   const marquee = createMemo(() => {
     const active = interaction()
@@ -728,6 +751,7 @@ function App() {
       tool() === 'pencil' ? 'tool-pencil' : '',
       tool() === 'eraser' ? 'tool-eraser' : '',
       slideshowActive() ? 'is-slideshow' : '',
+      laserPointerEnabled() ? 'laser-enabled' : '',
       interaction()?.kind === 'pan' ? 'is-panning' : '',
       interaction()?.kind === 'selectArea' ? 'is-selecting' : '',
     ]
@@ -805,6 +829,12 @@ function App() {
     }
 
     syncSlideshowView(slides[clampedIndex] ?? null)
+  })
+
+  createEffect(() => {
+    if (slideshowActive()) return
+    if (laserPointer()) setLaserPointer(null)
+    if (laserPointerEnabled()) setLaserPointerEnabled(false)
   })
 
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
@@ -953,6 +983,18 @@ function App() {
       ...createDefaultItemStyle('image'),
     } as CanvasItem
   }
+
+  const updateWebEmbedUrl = (id: string, nextUrl: string) => {
+    updateItem(id, { url: nextUrl } as Partial<CanvasItem>)
+  }
+
+  const openWebEmbedUrl = (url: string) => {
+    const href = normalizeUrlHref(url, { allowBareDomain: true })
+    if (!href) return
+    window.open(href, '_blank', 'noopener,noreferrer')
+  }
+
+  const renderableWebEmbedUrl = (url: string) => normalizeUrlHref(url, { allowBareDomain: true })
 
   const createExportPayload = () => {
     const exportItems = exportTargetItems()
@@ -1220,6 +1262,7 @@ function App() {
     } as CanvasItem
 
     if (type === 'slide') return item
+    if (type === 'webEmbed') return { ...item, url: '' } as CanvasItem
 
     return {
       ...item,
@@ -1342,6 +1385,8 @@ function App() {
     const restore = slideshowRestoreView()
     setSlideshowIndex(null)
     setSlideshowRestoreView(null)
+    setLaserPointerEnabled(false)
+    setLaserPointer(null)
     if (restore) setView(restore)
   }
 
@@ -1364,6 +1409,7 @@ function App() {
     setInteraction(null)
     setErasePreviewIds([])
     setSelectedIds([])
+    setLaserPointer(null)
     setTool('selection')
     goToSlideshowIndex(nextIndex)
   }
@@ -1373,6 +1419,17 @@ function App() {
     if (currentIndex === null) return
     goToSlideshowIndex(currentIndex + direction)
   }
+
+  const updateLaserPointerPosition = (clientX: number, clientY: number) => {
+    if (!slideshowActive() || !laserPointerEnabled() || !stageRef) return
+    const rect = stageRef.getBoundingClientRect()
+    setLaserPointer({
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    })
+  }
+
+  const hideLaserPointer = () => setLaserPointer(null)
 
   const closeExportModal = () => {
     setExportBusy(null)
@@ -1770,6 +1827,16 @@ function App() {
       if (event.key === 'End') {
         event.preventDefault()
         goToSlideshowIndex(presentationSlides().length - 1)
+        return
+      }
+
+      if (event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        setLaserPointerEnabled((current) => {
+          const next = !current
+          if (!next) setLaserPointer(null)
+          return next
+        })
         return
       }
 
@@ -2435,6 +2502,39 @@ function App() {
               </div>
             </Show>
 
+            <Show when={selectedWebEmbedItem()}>
+              {(item) => (
+                <div class="style-card">
+                  <div class="style-card-header">
+                    <strong>Embed URL</strong>
+                  </div>
+                  <label class="style-field">
+                    <span class="style-field-label">Website</span>
+                    <input
+                      class="style-input"
+                      type="url"
+                      value={item().url}
+                      placeholder="https://example.com"
+                      onInput={(event) => updateWebEmbedUrl(item().id, event.currentTarget.value)}
+                    />
+                  </label>
+                  <div class="style-inline-actions">
+                    <button
+                      type="button"
+                      class="style-chip"
+                      disabled={!renderableWebEmbedUrl(item().url)}
+                      onClick={() => openWebEmbedUrl(item().url)}
+                    >
+                      Open site
+                    </button>
+                  </div>
+                  <p class="hint-copy">
+                    Many sites block iframes. If that happens, the frame still keeps the URL and can be opened directly.
+                  </p>
+                </div>
+              )}
+            </Show>
+
               <p class="hint-copy">
                 {selectedPathItems().length
                   ? 'Paths support stroke controls. Text options apply to text and shape items.'
@@ -2487,6 +2587,7 @@ function App() {
           </div>
           <div class="slideshow-chip">
             <span>← → move</span>
+            <span>L laser</span>
             <span>Esc exit</span>
           </div>
           <div class="slideshow-actions">
@@ -2500,6 +2601,19 @@ function App() {
             >
               Next
             </button>
+            <button
+              type="button"
+              class={laserPointerEnabled() ? 'is-active' : undefined}
+              onClick={() => {
+                setLaserPointerEnabled((current) => {
+                  const next = !current
+                  if (!next) setLaserPointer(null)
+                  return next
+                })
+              }}
+            >
+              Laser
+            </button>
             <button type="button" onClick={stopSlideshow}>
               Exit
             </button>
@@ -2511,6 +2625,8 @@ function App() {
         class={stageClass()}
         ref={stageRef}
         onPointerDown={handleStagePointerDown}
+        onPointerMove={(event) => updateLaserPointerPosition(event.clientX, event.clientY)}
+        onPointerLeave={hideLaserPointer}
         onWheel={handleWheel}
       >
         <div
@@ -2523,6 +2639,10 @@ function App() {
               const imageItem = () => {
                 const current = item()
                 return isImageItem(current) ? current : null
+              }
+              const webEmbedItem = () => {
+                const current = item()
+                return isWebEmbedItem(current) ? current : null
               }
               const slideItem = () => {
                 const current = item()
@@ -2547,7 +2667,7 @@ function App() {
                   style={style()}
                   onPointerDown={(event) => handleItemPointerDown(event, item())}
                   onDblClick={(event) => {
-                    if (isPathItem(item()) || isImageItem(item()) || isSlideItem(item())) return
+                    if (isPathItem(item()) || isImageItem(item()) || isSlideItem(item()) || isWebEmbedItem(item())) return
                     event.stopPropagation()
                     setSelectedIds([itemId])
                     setEditingId(itemId)
@@ -2564,41 +2684,92 @@ function App() {
                         when={imageItem()}
                         fallback={
                           <Show
-                            when={slideItem()}
+                            when={webEmbedItem()}
                             fallback={
-                              <div
-                                ref={(element) => {
-                                  itemContentRefs.set(itemId, element)
-                                  scheduleFitItemHeight(itemId)
-                                }}
-                                class="item-content"
+                              <Show
+                                when={slideItem()}
+                                fallback={
+                                  <div
+                                    ref={(element) => {
+                                      itemContentRefs.set(itemId, element)
+                                      scheduleFitItemHeight(itemId)
+                                    }}
+                                    class="item-content"
+                                  >
+                                    <RichTextItem
+                                      content={textItem()?.content ?? createEmptyContent()}
+                                      editable={isEditing()}
+                                      placeholder="Double click to write"
+                                      onContentChange={(content) => {
+                                        if (!textItem()) return
+                                        updateItem(itemId, { content })
+                                      }}
+                                      onLayoutChange={() => {
+                                        scheduleFitItemHeight(itemId)
+                                      }}
+                                      onBlur={() => {
+                                        scheduleFitItemHeight(itemId)
+                                        setEditingId((current) => (current === itemId ? null : current))
+                                      }}
+                                    />
+                                  </div>
+                                }
                               >
-                                <RichTextItem
-                                  content={textItem()?.content ?? createEmptyContent()}
-                                  editable={isEditing()}
-                                  placeholder="Double click to write"
-                                  onContentChange={(content) => {
-                                    if (!textItem()) return
-                                    updateItem(itemId, { content })
-                                  }}
-                                  onLayoutChange={() => {
-                                    scheduleFitItemHeight(itemId)
-                                  }}
-                                  onBlur={() => {
-                                    scheduleFitItemHeight(itemId)
-                                    setEditingId((current) => (current === itemId ? null : current))
-                                  }}
-                                />
-                              </div>
+                                {(slideItem) => (
+                                  <div class="item-content">
+                                    <div class="slide-frame-shell" aria-hidden="true">
+                                      <span class="slide-frame-badge">Slide {slideOrderLookup().get(slideItem().id) ?? '?'}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </Show>
                             }
                           >
-                            {(slideItem) => (
-                              <div class="item-content">
-                                <div class="slide-frame-shell" aria-hidden="true">
-                                  <span class="slide-frame-badge">Slide {slideOrderLookup().get(slideItem().id) ?? '?'}</span>
+                            {(webEmbedItem) => {
+                              const href = () => renderableWebEmbedUrl(webEmbedItem().url)
+                              return (
+                                <div class="item-content">
+                                  <div class="web-embed-shell">
+                                    <div class="web-embed-toolbar">
+                                      <span class="web-embed-label">{href() ? getUrlDisplayLabel(webEmbedItem().url) : 'Web embed'}</span>
+                                      <button
+                                        class="web-embed-open-button"
+                                        type="button"
+                                        disabled={!href()}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          if (!href()) return
+                                          openWebEmbedUrl(webEmbedItem().url)
+                                        }}
+                                      >
+                                        Open
+                                      </button>
+                                    </div>
+                                    <Show
+                                      when={href()}
+                                      fallback={
+                                        <div class="web-embed-placeholder">
+                                          <strong>Paste a URL</strong>
+                                          <span>Set a website in the inspector to turn this frame into a live embed.</span>
+                                        </div>
+                                      }
+                                    >
+                                      {(href) => (
+                                        <iframe
+                                          class="web-embed-frame"
+                                          src={href()}
+                                          title={getUrlDisplayLabel(webEmbedItem().url) || 'Embedded website'}
+                                          loading="lazy"
+                                          referrerPolicy="strict-origin-when-cross-origin"
+                                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+                                        />
+                                      )}
+                                    </Show>
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              )
+                            }}
                           </Show>
                         }
                       >
@@ -2667,6 +2838,15 @@ function App() {
             <div
               class="slideshow-focus-frame"
               style={`transform: translate3d(${rect().x}px, ${rect().y}px, 0); width: ${rect().w}px; height: ${rect().h}px;`}
+            />
+          )}
+        </Show>
+
+        <Show when={slideshowActive() && laserPointerEnabled() && laserPointer()}>
+          {(point) => (
+            <div
+              class="laser-pointer"
+              style={`transform: translate3d(${point().x}px, ${point().y}px, 0);`}
             />
           )}
         </Show>

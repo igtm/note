@@ -1,10 +1,12 @@
 import { Editor, Extension } from '@tiptap/core'
 import type { JSONContent } from '@tiptap/core'
+import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import TaskItem from '@tiptap/extension-task-item'
 import TaskList from '@tiptap/extension-task-list'
 import StarterKit from '@tiptap/starter-kit'
 import { createEffect, onCleanup, onMount } from 'solid-js'
+import { findDeferredLinkRanges } from './links'
 import { contentSignature } from './notebook'
 
 const ListIndentExtension = Extension.create({
@@ -21,6 +23,54 @@ const ListIndentExtension = Extension.create({
         if (editor.isActive('taskItem')) return false
         if (!editor.isActive('listItem')) return false
         return editor.commands.liftListItem('listItem')
+      },
+    }
+  },
+})
+
+const applyDeferredLinksInCurrentBlock = (editor: Editor) => {
+  const { state, view } = editor
+  const linkMark = state.schema.marks.link
+  if (!linkMark) return
+
+  const parent = state.selection.$from.parent
+  if (!parent.isTextblock) return
+
+  const text = parent.textBetween(0, parent.content.size, ' ')
+  const matches = findDeferredLinkRanges(text)
+  if (!matches.length) return
+
+  const blockStart = state.selection.$from.start()
+  let transaction = state.tr
+  let changed = false
+
+  matches.forEach((match) => {
+    const from = blockStart + match.from
+    const to = blockStart + match.to
+    transaction = transaction.removeMark(from, to, linkMark)
+    transaction = transaction.addMark(
+      from,
+      to,
+      linkMark.create({
+        href: match.href,
+        target: '_blank',
+        rel: 'noopener noreferrer nofollow',
+      }),
+    )
+    changed = true
+  })
+
+  if (changed) view.dispatch(transaction)
+}
+
+const DeferredLinkExtension = Extension.create({
+  name: 'deferredLink',
+
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor }) => {
+        applyDeferredLinksInCurrentBlock(editor)
+        return false
       },
     }
   },
@@ -65,10 +115,18 @@ export const RichTextItem = (props: RichTextItemProps) => {
           heading: false,
           horizontalRule: false,
           italic: false,
-          link: false,
           strike: false,
           underline: false,
           trailingNode: false,
+        }),
+        Link.configure({
+          autolink: false,
+          linkOnPaste: false,
+          openOnClick: false,
+          HTMLAttributes: {
+            rel: 'noopener noreferrer nofollow',
+            target: '_blank',
+          },
         }),
         TaskList,
         TaskItem.configure({
@@ -80,6 +138,7 @@ export const RichTextItem = (props: RichTextItemProps) => {
           showOnlyWhenEditable: false,
         }),
         ListIndentExtension,
+        DeferredLinkExtension,
       ],
       editorProps: {
         attributes: {
@@ -148,7 +207,21 @@ export const RichTextItem = (props: RichTextItemProps) => {
       ref={element}
       class="item-editor"
       onPointerDown={(event) => {
-        if (props.editable) event.stopPropagation()
+        if (props.editable) {
+          event.stopPropagation()
+          return
+        }
+
+        if (!(event.target instanceof Element)) return
+        if (event.target.closest('a')) event.stopPropagation()
+      }}
+      onClick={(event) => {
+        if (props.editable || !(event.target instanceof Element)) return
+        const anchor = event.target.closest('a')
+        if (!(anchor instanceof HTMLAnchorElement) || !anchor.href) return
+        event.preventDefault()
+        event.stopPropagation()
+        window.open(anchor.href, '_blank', 'noopener,noreferrer')
       }}
     />
   )

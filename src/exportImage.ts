@@ -1,8 +1,10 @@
 import type { JSONContent } from '@tiptap/core'
+import { getUrlDisplayLabel } from './links'
 import {
   isImageItem,
   isPathItem,
   isSlideItem,
+  isWebEmbedItem,
   sortCanvasItemsForRender,
   type CanvasItem,
   type FontFamily,
@@ -159,7 +161,16 @@ export const getItemBounds = (items: CanvasItem[]): Bounds => {
 const renderInline = (nodes?: JSONContent[]) =>
   (nodes ?? [])
     .map((node) => {
-      if (node.type === 'text' && typeof node.text === 'string') return escapeHtml(node.text)
+      if (node.type === 'text' && typeof node.text === 'string') {
+        let content = escapeHtml(node.text)
+        for (const mark of node.marks ?? []) {
+          if (mark.type === 'link' && typeof mark.attrs?.href === 'string') {
+            const href = escapeXml(mark.attrs.href)
+            content = `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow">${content}</a>`
+          }
+        }
+        return content
+      }
       if (node.type === 'hardBreak') return '<br />'
       return renderBlock(node)
     })
@@ -240,6 +251,10 @@ const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, the
     return `<div class="canvas-item item-slide" style="${style}"><div class="item-content"><div class="slide-frame-shell"><span class="slide-frame-badge">Slide</span></div></div></div>`
   }
 
+  if (isWebEmbedItem(item)) {
+    return `<div class="canvas-item item-webEmbed" style="${style}"><div class="item-content"><div class="web-embed-placeholder"><strong>Web Embed</strong><span>${escapeHtml(getUrlDisplayLabel(item.url) || 'Set a URL in the note editor')}</span></div></div></div>`
+  }
+
   const body = `<div class="item-content"><div class="item-editor"><div class="item-editor-surface">${renderRichText(item.content)}</div></div></div>`
   if (item.type === 'diamond') {
     return `<div class="canvas-item item-diamond" style="${style}"><div class="diamond-fill"></div>${body}</div>`
@@ -298,6 +313,15 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.06)),
       var(--item-fill);
+  }
+  .export-root .item-webEmbed .item-content {
+    padding: 0;
+    overflow: hidden;
+    border-radius: 26px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.04)),
+      var(--item-fill);
+    box-shadow: ${theme.noteShadow};
   }
   .export-root .item-note .item-content {
     box-shadow:
@@ -391,6 +415,26 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
+  .export-root .web-embed-placeholder {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    padding: 18px 20px;
+    color: ${theme.ink};
+    font-family: ${theme.hand};
+  }
+  .export-root .web-embed-placeholder strong {
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .export-root .web-embed-placeholder span {
+    color: ${theme.textStrike};
+    font-size: 13px;
+    line-height: 1.45;
+  }
   .export-root .item-editor-surface {
     width: 100%;
     min-height: 100%;
@@ -402,6 +446,12 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     text-align: var(--item-text-align);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .export-root .item-editor-surface a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 0.16em;
   }
   .export-root .item-editor-surface p,
   .export-root .item-editor-surface ul,
