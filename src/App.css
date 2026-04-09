@@ -280,6 +280,7 @@
   border: 0;
 }
 
+.template-modal-backdrop,
 .export-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -289,6 +290,196 @@
   padding: 28px;
   background: rgba(14, 10, 7, 0.38);
   backdrop-filter: blur(20px);
+}
+
+.template-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1080px, calc(100vw - 56px));
+  max-height: calc(100vh - 56px);
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 34px;
+  background: var(--panel-bg-strong);
+  box-shadow: var(--panel-shadow);
+}
+
+.template-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.template-modal-header h2 {
+  margin: 6px 0 0;
+  color: var(--ink-strong);
+  font-size: 26px;
+  line-height: 1.05;
+}
+
+.template-modal-copy {
+  margin: 10px 0 0;
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.template-modal-body {
+  display: grid;
+  gap: 24px;
+  padding: 22px 26px 28px;
+  overflow: auto;
+}
+
+.template-section {
+  display: grid;
+  gap: 14px;
+}
+
+.template-section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.template-section-header h3 {
+  margin: 4px 0 0;
+  color: var(--ink-strong);
+  font-size: 17px;
+}
+
+.template-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.template-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 250px;
+  padding: 18px;
+  border: 1px solid var(--surface-border);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.08)),
+    var(--surface-bg);
+  box-shadow: var(--surface-shadow);
+}
+
+.template-card-business {
+  background:
+    linear-gradient(180deg, rgba(255, 240, 214, 0.62), rgba(255, 255, 255, 0.08)),
+    var(--surface-bg);
+}
+
+.template-card-engineering {
+  background:
+    linear-gradient(180deg, rgba(222, 235, 255, 0.62), rgba(255, 255, 255, 0.08)),
+    var(--surface-bg);
+}
+
+.template-card-education {
+  background:
+    linear-gradient(180deg, rgba(231, 246, 226, 0.62), rgba(255, 255, 255, 0.08)),
+    var(--surface-bg);
+}
+
+.template-card-head {
+  display: grid;
+  gap: 10px;
+}
+
+.template-card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--surface-border-strong);
+  border-radius: 999px;
+  color: var(--ink-strong);
+  background: rgba(255, 255, 255, 0.46);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.template-card h4 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.template-card-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.template-card-highlights {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.template-card-highlights p {
+  position: relative;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.template-card-highlights p::before {
+  content: '';
+  position: absolute;
+  top: 0.52em;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.template-use-button {
+  align-self: end;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: 14px;
+  color: var(--ink-strong);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: var(--surface-shadow);
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.template-use-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--surface-border-strong);
+  box-shadow: var(--surface-shadow-hover);
+}
+
+.template-use-button:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .export-modal {
@@ -1063,6 +1254,24 @@
   .zoom-controls {
     right: 10px;
     bottom: 10px;
+  }
+
+  .template-modal-backdrop,
+  .export-modal-backdrop {
+    padding: 10px;
+  }
+
+  .template-modal {
+    width: min(760px, calc(100vw - 20px));
+    max-height: calc(100vh - 20px);
+  }
+
+  .template-modal-header {
+    padding: 20px 20px 16px;
+  }
+
+  .template-modal-body {
+    padding: 18px 20px 20px;
   }
 
   .export-modal {

@@ -46,6 +46,7 @@ import {
   readEmbeddedItemsFromFile,
   serializeNoteFile,
 } from './noteFile'
+import { NOTE_TEMPLATE_SECTIONS, type NotebookTemplate } from './templates'
 
 type ShapeTool = 'rect' | 'ellipse' | 'diamond'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
@@ -554,6 +555,7 @@ function App() {
   const [erasePreviewIds, setErasePreviewIds] = createSignal<string[]>([])
   const [saveState, setSaveState] = createSignal('autosaved locally')
   const [appMenuOpen, setAppMenuOpen] = createSignal(false)
+  const [templateModalOpen, setTemplateModalOpen] = createSignal(false)
   const [exportModalOpen, setExportModalOpen] = createSignal(false)
   const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
   const [exportIncludeBackground, setExportIncludeBackground] = createSignal(true)
@@ -1168,6 +1170,23 @@ function App() {
     setExportModalOpen(true)
   }
 
+  const openTemplateModal = () => {
+    setAppMenuOpen(false)
+    setTemplateModalOpen(true)
+  }
+
+  const closeTemplateModal = () => {
+    setTemplateModalOpen(false)
+  }
+
+  const applyTemplate = (template: NotebookTemplate) => {
+    if (items().length > 0 && !confirm(`Replace the current note with the "${template.name}" template?`)) return
+
+    closeTemplateModal()
+    applyLoadedNotebook({ items: template.buildItems(), view: defaultView() }, null, null)
+    setSaveState(`template ${template.name.toLowerCase()}`)
+  }
+
   const closeExportModal = () => {
     setExportBusy(null)
     setExportModalOpen(false)
@@ -1503,6 +1522,14 @@ function App() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (templateModalOpen()) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeTemplateModal()
+      }
+      return
+    }
+
     if (exportModalOpen()) {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -1706,6 +1733,9 @@ function App() {
             <button class="app-menu-item" type="button" role="menuitem" onClick={() => void openNotePicker()}>
               Open
             </button>
+            <button class="app-menu-item" type="button" role="menuitem" onClick={openTemplateModal}>
+              Templateから作成
+            </button>
             <Show when={canSaveToCurrentFile()}>
               <button class="app-menu-item" type="button" role="menuitem" onClick={() => void saveToCurrentFile()}>
                 Save to current file
@@ -1750,6 +1780,71 @@ function App() {
         aria-hidden="true"
         onChange={handleImagePickerChange}
       />
+
+      <Show when={templateModalOpen()}>
+        <div class="template-modal-backdrop" onPointerDown={closeTemplateModal}>
+          <section
+            class="template-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="template-modal-title"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div class="template-modal-header">
+              <div>
+                <p class="eyebrow">Template library</p>
+                <h2 id="template-modal-title">Create from template</h2>
+                <p class="template-modal-copy">
+                  Start with a structured board for meetings, design reviews, incident follow-up, or teaching.
+                </p>
+              </div>
+              <button class="export-close-button" type="button" aria-label="Close template modal" onClick={closeTemplateModal}>
+                <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 6 12 12" />
+                  <path d="m18 6-12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="template-modal-body">
+              <For each={NOTE_TEMPLATE_SECTIONS}>
+                {(section) => (
+                  <section class="template-section" aria-labelledby={`template-section-${section.id}`}>
+                    <div class="template-section-header">
+                      <div>
+                        <p class="eyebrow">{section.label}</p>
+                        <h3 id={`template-section-${section.id}`}>{section.templates.length} ready-to-use layouts</h3>
+                      </div>
+                    </div>
+
+                    <div class="template-card-grid">
+                      <For each={section.templates}>
+                        {(template) => (
+                          <article class={`template-card template-card-${section.id}`}>
+                            <div class="template-card-head">
+                              <span class="template-card-badge">{section.label}</span>
+                              <h4>{template.name}</h4>
+                            </div>
+                            <p class="template-card-description">{template.description}</p>
+                            <div class="template-card-highlights">
+                              <For each={template.highlights}>
+                                {(highlight) => <p>{highlight}</p>}
+                              </For>
+                            </div>
+                            <button class="template-use-button" type="button" onClick={() => applyTemplate(template)}>
+                              Use template
+                            </button>
+                          </article>
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                )}
+              </For>
+            </div>
+          </section>
+        </div>
+      </Show>
 
       <Show when={exportModalOpen()}>
         <div class="export-modal-backdrop" onPointerDown={closeExportModal}>
