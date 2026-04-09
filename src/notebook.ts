@@ -1,6 +1,6 @@
 import type { JSONContent } from '@tiptap/core'
 
-export type ItemType = 'text' | 'note' | 'rect' | 'ellipse' | 'diamond' | 'path' | 'image'
+export type ItemType = 'text' | 'note' | 'rect' | 'ellipse' | 'diamond' | 'slide' | 'path' | 'image'
 export type StrokeStyle = 'solid' | 'dashed' | 'dotted'
 export type StrokeWidth = 'thin' | 'medium' | 'bold'
 export type FontFamily = 'hand' | 'sans' | 'mono'
@@ -43,12 +43,18 @@ export type ImageCanvasItem = BaseCanvasItem & {
   name?: string
 }
 
+export type SlideCanvasItem = BaseCanvasItem & {
+  type: 'slide'
+}
+
+type TextItemType = Exclude<ItemType, 'path' | 'image' | 'slide'>
+
 export type TextCanvasItem = BaseCanvasItem & {
-  type: Exclude<ItemType, 'path' | 'image'>
+  type: TextItemType
   content: JSONContent
 }
 
-export type CanvasItem = TextCanvasItem | PathCanvasItem | ImageCanvasItem
+export type CanvasItem = TextCanvasItem | PathCanvasItem | ImageCanvasItem | SlideCanvasItem
 
 export type Viewport = {
   x: number
@@ -63,7 +69,7 @@ export type SavedNotebook = {
 
 type LegacyCanvasItem = {
   id: string
-  type: Exclude<ItemType, 'path' | 'image'>
+  type: TextItemType
   x: number
   y: number
   w: number
@@ -95,7 +101,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const isItemType = (value: unknown): value is ItemType =>
-  typeof value === 'string' && ['text', 'note', 'rect', 'ellipse', 'diamond', 'path', 'image'].includes(value)
+  typeof value === 'string' && ['text', 'note', 'rect', 'ellipse', 'diamond', 'slide', 'path', 'image'].includes(value)
 
 const isStrokeWidth = (value: unknown): value is StrokeWidth =>
   typeof value === 'string' && ['thin', 'medium', 'bold'].includes(value)
@@ -157,6 +163,18 @@ export const createDefaultItemStyle = (type: ItemType): ItemStyle => {
     }
   }
 
+  if (type === 'slide') {
+    return {
+      color: '#fffdf8',
+      stroke: '#5b4826',
+      strokeWidth: 'medium',
+      strokeStyle: 'solid',
+      fontFamily: 'sans',
+      fontSize: 'md',
+      textAlign: 'left',
+    }
+  }
+
   return {
     color: 'transparent',
     stroke: '#1f1f1f',
@@ -186,8 +204,21 @@ export const withDefaultItemStyle = <T extends { type: ItemType } & Partial<Item
 
 export const isPathItem = (item: CanvasItem): item is PathCanvasItem => item.type === 'path'
 export const isImageItem = (item: CanvasItem): item is ImageCanvasItem => item.type === 'image'
+export const isSlideItem = (item: CanvasItem): item is SlideCanvasItem => item.type === 'slide'
 export const isTextCanvasItem = (item: CanvasItem): item is TextCanvasItem =>
-  item.type !== 'path' && item.type !== 'image'
+  item.type !== 'path' && item.type !== 'image' && item.type !== 'slide'
+
+export const sortCanvasItemsForRender = (items: CanvasItem[]) => {
+  const slideItems: CanvasItem[] = []
+  const otherItems: CanvasItem[] = []
+
+  items.forEach((item) => {
+    if (isSlideItem(item)) slideItems.push(item)
+    else otherItems.push(item)
+  })
+
+  return [...slideItems, ...otherItems]
+}
 
 const indentWidth = (value: string) =>
   [...value].reduce((total, character) => total + (character === '\t' ? 2 : 1), 0)
@@ -435,6 +466,24 @@ export const normalizeStoredItem = (value: unknown): CanvasItem | null => {
       src: value.src,
       mimeType: typeof value.mimeType === 'string' ? value.mimeType : undefined,
       name: typeof value.name === 'string' ? value.name : undefined,
+      color: styled.color,
+      stroke: styled.stroke,
+      strokeWidth: styled.strokeWidth,
+      strokeStyle: styled.strokeStyle,
+      fontFamily: styled.fontFamily,
+      fontSize: styled.fontSize,
+      textAlign: styled.textAlign,
+    }
+  }
+
+  if (value.type === 'slide') {
+    return {
+      id: value.id,
+      type: 'slide',
+      x: value.x,
+      y: value.y,
+      w: value.w,
+      h: value.h,
       color: styled.color,
       stroke: styled.stroke,
       strokeWidth: styled.strokeWidth,

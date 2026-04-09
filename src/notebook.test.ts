@@ -230,4 +230,41 @@ describe('normalizeStoredNotebook', () => {
       view: { x: 10, y: 20, zoom: 1 },
     })
   })
+
+  it('accepts slide frame items and injects slide defaults', () => {
+    const notebook = normalizeStoredNotebook({
+      items: [
+        {
+          id: 'slide-1',
+          type: 'slide',
+          x: 120,
+          y: 96,
+          w: 960,
+          h: 540,
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+
+    expect(notebook).toEqual({
+      items: [
+        {
+          id: 'slide-1',
+          type: 'slide',
+          x: 120,
+          y: 96,
+          w: 960,
+          h: 540,
+          color: '#fffdf8',
+          stroke: '#5b4826',
+          strokeWidth: 'medium',
+          strokeStyle: 'solid',
+          fontFamily: 'sans',
+          fontSize: 'md',
+          textAlign: 'left',
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+  })
 })

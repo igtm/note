@@ -2,6 +2,8 @@ import type { JSONContent } from '@tiptap/core'
 import {
   isImageItem,
   isPathItem,
+  isSlideItem,
+  sortCanvasItemsForRender,
   type CanvasItem,
   type FontFamily,
   type FontSize,
@@ -234,6 +236,10 @@ const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, the
     return `<div class="canvas-item item-image" style="${style}"><div class="item-content"><img class="image-item" src="${escapeXml(item.src)}" alt="${escapeXml(item.name ?? 'Exported image')}" /></div></div>`
   }
 
+  if (isSlideItem(item)) {
+    return `<div class="canvas-item item-slide" style="${style}"><div class="item-content"><div class="slide-frame-shell"><span class="slide-frame-badge">Slide</span></div></div></div>`
+  }
+
   const body = `<div class="item-content"><div class="item-editor"><div class="item-editor-surface">${renderRichText(item.content)}</div></div></div>`
   if (item.type === 'diamond') {
     return `<div class="canvas-item item-diamond" style="${style}"><div class="diamond-fill"></div>${body}</div>`
@@ -281,6 +287,17 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
   .export-root .item-note .item-content,
   .export-root .item-text .item-content {
     border-radius: 22px 26px 24px 19px;
+  }
+  .export-root .item-slide .item-content {
+    padding: 0;
+    overflow: hidden;
+    border-radius: 34px;
+    box-shadow:
+      0 24px 60px rgba(0, 0, 0, 0.18),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.06)),
+      var(--item-fill);
   }
   .export-root .item-note .item-content {
     box-shadow:
@@ -344,6 +361,35 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
   .export-root .item-editor {
     width: 100%;
     min-height: 100%;
+  }
+  .export-root .slide-frame-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .export-root .slide-frame-shell::after {
+    content: '';
+    position: absolute;
+    inset: 28px;
+    border: 1px dashed rgba(91, 72, 38, 0.22);
+    border-radius: 24px;
+  }
+  .export-root .slide-frame-badge {
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 12px;
+    border: 1px solid rgba(91, 72, 38, 0.18);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    color: rgba(91, 72, 38, 0.76);
+    font-family: ${theme.mono};
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
   .export-root .item-editor-surface {
     width: 100%;
@@ -445,7 +491,7 @@ export const buildExportSvg = ({
     embedPayload && embedPayload.length
       ? `<metadata id="${EXPORT_SVG_METADATA_ID}">${escapeXml(embedPayload)}</metadata>`
       : ''
-  const content = items.map((item) => renderCanvasItem(item, bounds, padding, themeName, theme)).join('')
+  const content = sortCanvasItemsForRender(items).map((item) => renderCanvasItem(item, bounds, padding, themeName, theme)).join('')
   const filenameBase = onlySelected ? 'pencil-note-selection' : 'pencil-note-canvas'
   const html = `<style>${exportCss(theme, includeBackground)}</style><div class="export-root"><div class="export-canvas">${content}</div></div>`
 

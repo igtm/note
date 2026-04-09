@@ -20,8 +20,10 @@ import {
   createEmptyContent,
   isImageItem,
   isPathItem,
+  isSlideItem,
   isTextCanvasItem,
   normalizeStoredNotebook,
+  sortCanvasItemsForRender,
   type CanvasItem,
   type FontFamily,
   type FontSize,
@@ -29,6 +31,7 @@ import {
   type ItemType,
   type PathCanvasItem,
   type SavedNotebook,
+  type SlideCanvasItem,
   type StrokeStyle,
   type StrokeWidth,
   type TextAlign,
@@ -52,9 +55,10 @@ import {
   readEmbeddedItemsFromFile,
   serializeNoteFile,
 } from './noteFile'
+import { collectPresentationSlides, fitSlideToViewport } from './slideshow'
 import { NOTE_TEMPLATE_SECTIONS, type NotebookTemplate } from './templates'
 
-type ShapeTool = 'rect' | 'ellipse' | 'diamond'
+type ShapeTool = 'rect' | 'ellipse' | 'diamond' | 'slide'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
 
 type NoteFileHandle = {
@@ -161,6 +165,7 @@ const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
   { id: 'eraser', label: 'Eraser', shortcut: 'E' },
   { id: 'text', label: 'Text', shortcut: 'T' },
   { id: 'rect', label: 'Rect', shortcut: 'R' },
+  { id: 'slide', label: 'Slide', shortcut: 'L' },
   { id: 'ellipse', label: 'Circle', shortcut: 'O' },
   { id: 'diamond', label: 'Diamond', shortcut: 'D' },
 ]
@@ -212,7 +217,7 @@ const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 const unique = (values: string[]) => [...new Set(values)]
 
-const isShapeTool = (value: Tool): value is ShapeTool => ['rect', 'ellipse', 'diamond'].includes(value)
+const isShapeTool = (value: Tool): value is ShapeTool => ['rect', 'ellipse', 'diamond', 'slide'].includes(value)
 
 const strokeWidthPx = (value: StrokeWidth) =>
   ({
@@ -431,6 +436,8 @@ const loadNotebook = (): SavedNotebook => {
 const isEditableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === 'INPUT' || target.isContentEditable)
 
+const isFillableItem = (item: CanvasItem) => !isPathItem(item) && !isImageItem(item)
+
 const typeLabel = (type: ItemType) =>
   ({
     text: 'Text frame',
@@ -438,6 +445,7 @@ const typeLabel = (type: ItemType) =>
     rect: 'Rectangle',
     ellipse: 'Circle',
     diamond: 'Diamond',
+    slide: 'Slide frame',
     path: 'Stroke',
     image: 'Image',
   })[type]
@@ -504,6 +512,16 @@ const ToolIcon = (props: { tool: Tool }) => {
     )
   }
 
+  if (props.tool === 'slide') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="11" rx="1.8" />
+        <path d="M9 19h6" />
+        <path d="M12 16v3" />
+      </svg>
+    )
+  }
+
   return (
     <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 18h12" />
@@ -563,6 +581,8 @@ function App() {
   const [appMenuOpen, setAppMenuOpen] = createSignal(false)
   const [templateModalOpen, setTemplateModalOpen] = createSignal(false)
   const [exportModalOpen, setExportModalOpen] = createSignal(false)
+  const [slideshowIndex, setSlideshowIndex] = createSignal<number | null>(null)
+  const [slideshowRestoreView, setSlideshowRestoreView] = createSignal<Viewport | null>(null)
   const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
   const [exportIncludeBackground, setExportIncludeBackground] = createSignal(true)
   const [exportDarkMode, setExportDarkMode] = createSignal(false)
@@ -592,9 +612,44 @@ function App() {
     return items().filter((item) => ids.has(item.id))
   })
   const itemLookup = createMemo(() => new Map(items().map((item) => [item.id, item] as const)))
-  const itemIds = createMemo(() => items().map((item) => item.id))
+  const renderedItems = createMemo(() => sortCanvasItemsForRender(items()))
+  const itemIds = createMemo(() => renderedItems().map((item) => item.id))
+  const presentationSlides = createMemo(() => collectPresentationSlides(items()))
+  const presentationSlideIndexLookup = createMemo(
+    () => new Map(presentationSlides().map((item, index) => [item.id, index] as const)),
+  )
+  const slideOrderLookup = createMemo(() => new Map(presentationSlides().map((item, index) => [item.id, index + 1] as const)))
+  const slideshowActive = createMemo(() => slideshowIndex() !== null && presentationSlides().length > 0)
+  const currentSlide = createMemo<SlideCanvasItem | null>(() => {
+    const index = slideshowIndex()
+    const slides = presentationSlides()
+    if (index === null || !slides.length) return null
+    return slides[Math.min(Math.max(index, 0), slides.length - 1)] ?? null
+  })
+  const slideshowVisibleIds = createMemo(() => {
+    const slide = currentSlide()
+    if (!slideshowActive() || !slide) return null
+    const slideBounds = itemBox(slide)
+    return new Set(
+      items()
+        .filter((item) => item.id === slide.id || (!isSlideItem(item) && boxesIntersect(itemBox(item), slideBounds)))
+        .map((item) => item.id),
+    )
+  })
+  const slideshowFocusRect = createMemo(() => {
+    const slide = currentSlide()
+    if (!slideshowActive() || !slide) return null
+    const current = view()
+    return {
+      x: slide.x * current.zoom + current.x,
+      y: slide.y * current.zoom + current.y,
+      w: slide.w * current.zoom,
+      h: slide.h * current.zoom,
+    }
+  })
   const selectedItem = createMemo(() => (selectedItems().length === 1 ? selectedItems()[0] : undefined))
   const selectedCount = createMemo(() => selectedItems().length)
+  const selectedFillItems = createMemo(() => selectedItems().filter(isFillableItem))
   const zoomLabel = createMemo(() => `${Math.round(view().zoom * 100)}%`)
   const marquee = createMemo(() => {
     const active = interaction()
@@ -617,6 +672,7 @@ function App() {
   const resolvedTheme = createMemo<ResolvedTheme>(() => resolveTheme(themeMode(), systemTheme()))
   const canSaveToCurrentFile = createMemo(() => currentNoteFileHandle() !== null)
   const canExportSelection = createMemo(() => selectedCount() > 0)
+  const canStartSlideshow = createMemo(() => presentationSlides().length > 0)
   const exportTargetItems = createMemo(() =>
     exportOnlySelected() && canExportSelection() ? selectedItems() : items(),
   )
@@ -637,22 +693,28 @@ function App() {
     const box = shapeBoxFromDrag(active.type, active.startWorld, active.currentWorld)
     if (!isShapeBoxVisible(box)) return null
 
-    return {
+    const draft = {
       id: 'shape-draft',
       type: active.type,
       x: box.x,
       y: box.y,
       w: box.w,
       h: box.h,
-      content: createEmptyContent(),
       ...createDefaultItemStyle(active.type),
+    } as CanvasItem
+
+    if (active.type === 'slide') return draft
+
+    return {
+      ...draft,
+      content: createEmptyContent(),
     } as CanvasItem
   })
   const canEditText = createMemo(() => selectedTextItems().length === selectedItems().length && selectedItems().length > 0)
-  const canChangeFill = createMemo(() => selectedTextItems().length > 0)
+  const canChangeFill = createMemo(() => selectedFillItems().length > 0)
   const canResize = createMemo(() => selectedItem() && !isPathItem(selectedItem()!))
   const inspectorStroke = createMemo(() => selectedItems()[0]?.stroke ?? '#1f1f1f')
-  const inspectorFill = createMemo(() => selectedTextItems()[0]?.color ?? 'transparent')
+  const inspectorFill = createMemo(() => selectedFillItems()[0]?.color ?? 'transparent')
   const inspectorStrokeWidth = createMemo<StrokeWidth>(() => selectedItems()[0]?.strokeWidth ?? 'medium')
   const inspectorStrokeStyle = createMemo<StrokeStyle>(() => selectedItems()[0]?.strokeStyle ?? 'solid')
   const inspectorFontFamily = createMemo<FontFamily>(() => selectedTextItems()[0]?.fontFamily ?? 'hand')
@@ -665,6 +727,7 @@ function App() {
       tool() === 'pan' ? 'tool-pan' : '',
       tool() === 'pencil' ? 'tool-pencil' : '',
       tool() === 'eraser' ? 'tool-eraser' : '',
+      slideshowActive() ? 'is-slideshow' : '',
       interaction()?.kind === 'pan' ? 'is-panning' : '',
       interaction()?.kind === 'selectArea' ? 'is-selecting' : '',
     ]
@@ -724,6 +787,24 @@ function App() {
   createEffect(() => {
     if (canExportSelection()) return
     if (exportOnlySelected()) setExportOnlySelected(false)
+  })
+
+  createEffect(() => {
+    const slides = presentationSlides()
+    const index = slideshowIndex()
+    if (index === null) return
+    if (!slides.length) {
+      stopSlideshow()
+      return
+    }
+
+    const clampedIndex = Math.min(Math.max(index, 0), slides.length - 1)
+    if (clampedIndex !== index) {
+      setSlideshowIndex(clampedIndex)
+      return
+    }
+
+    syncSlideshowView(slides[clampedIndex] ?? null)
   })
 
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
@@ -901,6 +982,8 @@ function App() {
   const currentNotebook = (): SavedNotebook => ({ items: items(), view: view() })
 
   const applyLoadedNotebook = (payload: SavedNotebook, handle: NoteFileHandle | null, name: string | null) => {
+    setSlideshowIndex(null)
+    setSlideshowRestoreView(null)
     setItems(payload.items)
     setView(payload.view)
     setSelectedIds([])
@@ -1126,16 +1209,22 @@ function App() {
     const box = shapeBoxFromDrag(type, startWorld, endWorld)
     if (!isShapeBoxVisible(box)) return null
 
-    return {
+    const item = {
       id: createId(),
       type,
       x: box.x,
       y: box.y,
       w: box.w,
       h: box.h,
-      content: createEmptyContent(),
       ...createDefaultItemStyle(type),
-    }
+    } as CanvasItem
+
+    if (type === 'slide') return item
+
+    return {
+      ...item,
+      content: createEmptyContent(),
+    } as CanvasItem
   }
 
   const placeTextItem = (point: Point) => {
@@ -1231,6 +1320,58 @@ function App() {
     closeTemplateModal()
     applyLoadedNotebook({ items: template.buildItems(), view: defaultView() }, null, null)
     setSaveState(`template ${template.name.toLowerCase()}`)
+  }
+
+  const syncSlideshowView = (slide: SlideCanvasItem | null) => {
+    if (!slide || !stageRef) return
+    const rect = stageRef.getBoundingClientRect()
+    setView(fitSlideToViewport(slide, rect.width || window.innerWidth, rect.height || window.innerHeight))
+  }
+
+  const goToSlideshowIndex = (nextIndex: number) => {
+    const slides = presentationSlides()
+    if (!slides.length) return
+    const clampedIndex = Math.min(Math.max(nextIndex, 0), slides.length - 1)
+    setSlideshowIndex(clampedIndex)
+    requestAnimationFrame(() => syncSlideshowView(slides[clampedIndex] ?? null))
+  }
+
+  const stopSlideshow = () => {
+    if (slideshowIndex() === null) return
+
+    const restore = slideshowRestoreView()
+    setSlideshowIndex(null)
+    setSlideshowRestoreView(null)
+    if (restore) setView(restore)
+  }
+
+  const startSlideshow = (requestedIndex?: number) => {
+    const slides = presentationSlides()
+    if (!slides.length) return
+
+    const selectedSlideId = selectedItems().find(isSlideItem)?.id
+    const selectedIndex = selectedSlideId ? presentationSlideIndexLookup().get(selectedSlideId) : undefined
+    const nextIndex = Math.min(
+      Math.max(requestedIndex ?? selectedIndex ?? 0, 0),
+      slides.length - 1,
+    )
+
+    if (slideshowIndex() === null) setSlideshowRestoreView({ ...view() })
+    closeTemplateModal()
+    closeExportModal()
+    setAppMenuOpen(false)
+    setEditingId(null)
+    setInteraction(null)
+    setErasePreviewIds([])
+    setSelectedIds([])
+    setTool('selection')
+    goToSlideshowIndex(nextIndex)
+  }
+
+  const stepSlideshow = (direction: -1 | 1) => {
+    const currentIndex = slideshowIndex()
+    if (currentIndex === null) return
+    goToSlideshowIndex(currentIndex + direction)
   }
 
   const closeExportModal = () => {
@@ -1334,6 +1475,7 @@ function App() {
   }
 
   const handleStagePointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    if (slideshowActive()) return
     if (event.button !== 0 || isEditableTarget(event.target)) return
     setErasePreviewIds([])
 
@@ -1394,6 +1536,7 @@ function App() {
     event: PointerEvent & { currentTarget: HTMLDivElement },
     item: CanvasItem,
   ) => {
+    if (slideshowActive()) return
     if (event.button !== 0 || editingId() === item.id || isEditableTarget(event.target)) return
 
     const currentTool = tool()
@@ -1425,6 +1568,7 @@ function App() {
     event: PointerEvent & { currentTarget: HTMLButtonElement },
     item: CanvasItem,
   ) => {
+    if (slideshowActive()) return
     if (isPathItem(item)) return
     event.stopPropagation()
     setSelectedIds([item.id])
@@ -1535,6 +1679,10 @@ function App() {
   }
 
   const handleWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
+    if (slideshowActive()) {
+      event.preventDefault()
+      return
+    }
     event.preventDefault()
 
     if (event.ctrlKey || event.metaKey) {
@@ -1551,7 +1699,7 @@ function App() {
   }
 
   const handlePaste = (event: ClipboardEvent) => {
-    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen() || slideshowActive()) return
 
     const clipboardPayload = event.clipboardData?.getData(NOTE_CLIPBOARD_MIME)
     const clipboardMarker = event.clipboardData?.getData('text/plain')
@@ -1581,19 +1729,53 @@ function App() {
   }
 
   const handleCopy = (event: ClipboardEvent) => {
-    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen() || slideshowActive()) return
     if (!copySelectedItems(event.clipboardData)) return
     event.preventDefault()
   }
 
   const handleCut = (event: ClipboardEvent) => {
-    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen() || slideshowActive()) return
     if (!copySelectedItems(event.clipboardData)) return
     event.preventDefault()
     deleteSelected()
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (slideshowActive()) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        stopSlideshow()
+        return
+      }
+
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'PageDown') {
+        event.preventDefault()
+        stepSlideshow(1)
+        return
+      }
+
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp') {
+        event.preventDefault()
+        stepSlideshow(-1)
+        return
+      }
+
+      if (event.key === 'Home') {
+        event.preventDefault()
+        goToSlideshowIndex(0)
+        return
+      }
+
+      if (event.key === 'End') {
+        event.preventDefault()
+        goToSlideshowIndex(presentationSlides().length - 1)
+        return
+      }
+
+      return
+    }
+
     if (templateModalOpen()) {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -1714,6 +1896,10 @@ function App() {
       if (appMenuRef?.contains(target)) return
       setAppMenuOpen(false)
     }
+    const handleWindowResize = () => {
+      if (!slideshowActive()) return
+      syncSlideshowView(currentSlide())
+    }
     const handleThemeChange = (event: MediaQueryListEvent) => {
       setSystemTheme(event.matches ? 'dark' : 'light')
     }
@@ -1721,6 +1907,7 @@ function App() {
     setSystemTheme(media.matches ? 'dark' : 'light')
     media.addEventListener('change', handleThemeChange)
     window.addEventListener('pointerdown', handleWindowPointerDown)
+    window.addEventListener('resize', handleWindowResize)
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
@@ -1733,6 +1920,7 @@ function App() {
     onCleanup(() => {
       media.removeEventListener('change', handleThemeChange)
       window.removeEventListener('pointerdown', handleWindowPointerDown)
+      window.removeEventListener('resize', handleWindowResize)
     })
   })
 
@@ -1750,121 +1938,132 @@ function App() {
 
   return (
     <main class="notebook-app">
-      <section class="toolbar" aria-label="Canvas tools" onPointerDown={(event) => event.stopPropagation()}>
-        <div class="tool-strip">
-          <For each={TOOLS}>
-            {(entry) => (
-              <button
-                class={tool() === entry.id ? 'tool-button is-active' : 'tool-button'}
-                type="button"
-                title={`${entry.label} (${entry.shortcut})`}
-                onClick={() => setTool(entry.id)}
-              >
-                <ToolIcon tool={entry.id} />
-                <span>{entry.label}</span>
-                <small>{entry.shortcut}</small>
-              </button>
-            )}
-          </For>
-        </div>
+      <Show when={!slideshowActive()}>
+        <section class="toolbar" aria-label="Canvas tools" onPointerDown={(event) => event.stopPropagation()}>
+          <div class="tool-strip">
+            <For each={TOOLS}>
+              {(entry) => (
+                <button
+                  class={tool() === entry.id ? 'tool-button is-active' : 'tool-button'}
+                  type="button"
+                  title={`${entry.label} (${entry.shortcut})`}
+                  onClick={() => setTool(entry.id)}
+                >
+                  <ToolIcon tool={entry.id} />
+                  <span>{entry.label}</span>
+                  <small>{entry.shortcut}</small>
+                </button>
+              )}
+            </For>
+          </div>
 
-        <div class="toolbar-actions">
+          <div class="toolbar-actions">
+            <button
+              class="action-button"
+              type="button"
+              title="Insert image"
+              aria-label="Insert image"
+              onClick={openImagePicker}
+            >
+              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="5" width="16" height="14" rx="2" />
+                <circle cx="9" cy="10" r="1.6" />
+                <path d="m7 17 4.1-4.1a1.4 1.4 0 0 1 2 0L17 17" />
+                <path d="m13.5 17 1.8-1.8a1.4 1.4 0 0 1 2 0L19 17" />
+              </svg>
+            </button>
+            <button
+              class="action-button"
+              type="button"
+              title="Duplicate"
+              aria-label="Duplicate selected"
+              onClick={duplicateSelected}
+              disabled={selectedCount() === 0}
+            >
+              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="8" y="8" width="10" height="10" rx="2" />
+                <path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1" />
+              </svg>
+            </button>
+            <button
+              class="action-button"
+              type="button"
+              title="Delete"
+              aria-label="Delete selected"
+              onClick={deleteSelected}
+              disabled={selectedCount() === 0}
+            >
+              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 7h14" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+                <path d="M8 7l1-3h6l1 3" />
+                <path d="M7 7l1 13h8l1-13" />
+              </svg>
+            </button>
+          </div>
+        </section>
+
+        <div class="app-menu" ref={appMenuRef} onPointerDown={(event) => event.stopPropagation()}>
           <button
-            class="action-button"
+            class={appMenuOpen() ? 'app-menu-button is-active' : 'app-menu-button'}
             type="button"
-            title="Insert image"
-            aria-label="Insert image"
-            onClick={openImagePicker}
-          >
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="4" y="5" width="16" height="14" rx="2" />
-              <circle cx="9" cy="10" r="1.6" />
-              <path d="m7 17 4.1-4.1a1.4 1.4 0 0 1 2 0L17 17" />
-              <path d="m13.5 17 1.8-1.8a1.4 1.4 0 0 1 2 0L19 17" />
-            </svg>
-          </button>
-          <button
-            class="action-button"
-            type="button"
-            title="Duplicate"
-            aria-label="Duplicate selected"
-            onClick={duplicateSelected}
-            disabled={selectedCount() === 0}
-          >
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="8" y="8" width="10" height="10" rx="2" />
-              <path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1" />
-            </svg>
-          </button>
-          <button
-            class="action-button"
-            type="button"
-            title="Delete"
-            aria-label="Delete selected"
-            onClick={deleteSelected}
-            disabled={selectedCount() === 0}
+            title={saveState()}
+            aria-label="Notebook menu"
+            aria-haspopup="menu"
+            aria-expanded={appMenuOpen()}
+            onClick={() => setAppMenuOpen((current) => !current)}
           >
             <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 7h14" />
-              <path d="M10 11v6" />
-              <path d="M14 11v6" />
-              <path d="M8 7l1-3h6l1 3" />
-              <path d="M7 7l1 13h8l1-13" />
+              <path d="M5 12h14" />
+              <path d="M5 17h14" />
             </svg>
           </button>
-        </div>
-      </section>
 
-      <div class="app-menu" ref={appMenuRef} onPointerDown={(event) => event.stopPropagation()}>
-        <button
-          class={appMenuOpen() ? 'app-menu-button is-active' : 'app-menu-button'}
-          type="button"
-          title={saveState()}
-          aria-label="Notebook menu"
-          aria-haspopup="menu"
-          aria-expanded={appMenuOpen()}
-          onClick={() => setAppMenuOpen((current) => !current)}
-        >
-          <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 7h14" />
-            <path d="M5 12h14" />
-            <path d="M5 17h14" />
-          </svg>
-        </button>
-
-        <Show when={appMenuOpen()}>
-          <div class="app-menu-panel" role="menu" aria-label="Notebook actions">
-            <button class="app-menu-item" type="button" role="menuitem" onClick={() => void openNotePicker()}>
-              <span class="app-menu-item-text">Open</span>
-              <span class="app-menu-item-shortcut">Ctrl+O</span>
-            </button>
-            <button class="app-menu-item" type="button" role="menuitem" onClick={openTemplateModal}>
-              <span class="app-menu-item-text">Templateから作成</span>
-            </button>
-            <Show when={canSaveToCurrentFile()}>
-              <button class="app-menu-item" type="button" role="menuitem" onClick={() => void saveToCurrentFile()}>
-                <span class="app-menu-item-text">Save to current file</span>
-                <span class="app-menu-item-shortcut">Ctrl+S</span>
+          <Show when={appMenuOpen()}>
+            <div class="app-menu-panel" role="menu" aria-label="Notebook actions">
+              <button class="app-menu-item" type="button" role="menuitem" onClick={() => void openNotePicker()}>
+                <span class="app-menu-item-text">Open</span>
+                <span class="app-menu-item-shortcut">Ctrl+O</span>
               </button>
-            </Show>
-            <button class="app-menu-item" type="button" role="menuitem" onClick={saveNoteToFile}>
-              <span class="app-menu-item-text">Save to...</span>
-            </button>
-            <button
-              class="app-menu-item"
-              type="button"
-              role="menuitem"
-              onClick={openExportModal}
-              disabled={items().length === 0}
-            >
-              <span class="app-menu-item-text">Export Image</span>
-            </button>
-            <button class="app-menu-item is-danger" type="button" role="menuitem" onClick={clearBoard}>
-              <span class="app-menu-item-text">Reset note</span>
-            </button>
-          </div>
-        </Show>
-      </div>
+              <button class="app-menu-item" type="button" role="menuitem" onClick={openTemplateModal}>
+                <span class="app-menu-item-text">Templateから作成</span>
+              </button>
+              <Show when={canSaveToCurrentFile()}>
+                <button class="app-menu-item" type="button" role="menuitem" onClick={() => void saveToCurrentFile()}>
+                  <span class="app-menu-item-text">Save to current file</span>
+                  <span class="app-menu-item-shortcut">Ctrl+S</span>
+                </button>
+              </Show>
+              <button class="app-menu-item" type="button" role="menuitem" onClick={saveNoteToFile}>
+                <span class="app-menu-item-text">Save to...</span>
+              </button>
+              <button
+                class="app-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={() => startSlideshow()}
+                disabled={!canStartSlideshow()}
+              >
+                <span class="app-menu-item-text">Start slideshow</span>
+              </button>
+              <button
+                class="app-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={openExportModal}
+                disabled={items().length === 0}
+              >
+                <span class="app-menu-item-text">Export Image</span>
+              </button>
+              <button class="app-menu-item is-danger" type="button" role="menuitem" onClick={clearBoard}>
+                <span class="app-menu-item-text">Reset note</span>
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
 
       <input
         ref={notePickerRef}
@@ -2100,22 +2299,23 @@ function App() {
         </div>
       </Show>
 
-      <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item settings">
-        <Show
-          when={selectedCount() > 0}
-          fallback={
+      <Show when={!slideshowActive()}>
+        <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item settings">
+          <Show
+            when={selectedCount() > 0}
+            fallback={
+              <>
+                <p class="eyebrow">Tools</p>
+                <h1>Canvas styles</h1>
+                <p class="hint-copy">
+                  R / O / D / L: drag to create frames and shapes. P: pencil, E: eraser.
+                </p>
+              </>
+            }
+          >
             <>
-              <p class="eyebrow">Tools</p>
-              <h1>Canvas styles</h1>
-              <p class="hint-copy">
-                R / O / D: drag to create shapes. P: pencil, E: eraser.
-              </p>
-            </>
-          }
-        >
-          <>
-            <p class="eyebrow">Selected</p>
-            <h1>{selectedItem() ? typeLabel(selectedItem()!.type) : `${selectedCount()} items`}</h1>
+              <p class="eyebrow">Selected</p>
+              <h1>{selectedItem() ? typeLabel(selectedItem()!.type) : `${selectedCount()} items`}</h1>
 
             <div class="style-card">
               <div class="style-card-header">
@@ -2175,7 +2375,7 @@ function App() {
                         type="button"
                         class={inspectorFill() === option.value ? 'style-swatch is-active' : 'style-swatch'}
                         title={option.label}
-                        onClick={() => updateSelectedItemsWhere(isTextCanvasItem, { color: option.value })}
+                        onClick={() => updateSelectedItemsWhere(isFillableItem, { color: option.value })}
                       >
                         <span
                           class={option.value === 'transparent' ? 'swatch-clear' : ''}
@@ -2235,46 +2435,77 @@ function App() {
               </div>
             </Show>
 
-            <p class="hint-copy">
-              {selectedPathItems().length
-                ? 'Paths support stroke controls. Text options apply to text and shape items.'
-                : 'Double click a text-capable item to edit. Shape defaults are black stroke on transparent fill.'}
-            </p>
-          </>
-        </Show>
-      </section>
+              <p class="hint-copy">
+                {selectedPathItems().length
+                  ? 'Paths support stroke controls. Text options apply to text and shape items.'
+                  : 'Double click a text-capable item to edit. Slide frames stay as page boundaries.'}
+              </p>
+            </>
+          </Show>
+        </section>
 
-      <section class="zoom-controls" aria-label="Zoom and view controls" onPointerDown={(event) => event.stopPropagation()}>
-        <div class="zoom-row">
-          <button type="button" onClick={() => zoomFromCenter(0.88)} aria-label="Zoom out">
-            -
-          </button>
-          <span>{zoomLabel()}</span>
-          <button type="button" onClick={() => zoomFromCenter(1.12)} aria-label="Zoom in">
-            +
-          </button>
-          <button type="button" onClick={resetView}>
-            Reset view
-          </button>
+        <section class="zoom-controls" aria-label="Zoom and view controls" onPointerDown={(event) => event.stopPropagation()}>
+          <div class="zoom-row">
+            <button type="button" onClick={() => zoomFromCenter(0.88)} aria-label="Zoom out">
+              -
+            </button>
+            <span>{zoomLabel()}</span>
+            <button type="button" onClick={() => zoomFromCenter(1.12)} aria-label="Zoom in">
+              +
+            </button>
+            <button type="button" onClick={resetView}>
+              Reset view
+            </button>
+          </div>
+          <div class="theme-row" aria-label="Theme controls">
+            <span class="theme-label">Theme</span>
+            <For each={THEME_OPTIONS}>
+              {(option) => (
+                <button
+                  type="button"
+                  class={themeMode() === option.value ? 'theme-button is-active' : 'theme-button'}
+                  title={
+                    option.value === 'system' ? `System (${resolvedTheme()})` : option.label
+                  }
+                  onClick={() => setThemeMode(option.value)}
+                >
+                  {option.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </section>
+      </Show>
+
+      <Show when={slideshowActive()}>
+        <div class="slideshow-hud" onPointerDown={(event) => event.stopPropagation()}>
+          <div class="slideshow-chip">
+            <strong>Slideshow</strong>
+            <span>
+              {slideshowIndex() !== null ? slideshowIndex()! + 1 : 0} / {presentationSlides().length}
+            </span>
+          </div>
+          <div class="slideshow-chip">
+            <span>← → move</span>
+            <span>Esc exit</span>
+          </div>
+          <div class="slideshow-actions">
+            <button type="button" onClick={() => stepSlideshow(-1)} disabled={slideshowIndex() === 0}>
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => stepSlideshow(1)}
+              disabled={slideshowIndex() === null || slideshowIndex() === presentationSlides().length - 1}
+            >
+              Next
+            </button>
+            <button type="button" onClick={stopSlideshow}>
+              Exit
+            </button>
+          </div>
         </div>
-        <div class="theme-row" aria-label="Theme controls">
-          <span class="theme-label">Theme</span>
-          <For each={THEME_OPTIONS}>
-            {(option) => (
-              <button
-                type="button"
-                class={themeMode() === option.value ? 'theme-button is-active' : 'theme-button'}
-                title={
-                  option.value === 'system' ? `System (${resolvedTheme()})` : option.label
-                }
-                onClick={() => setThemeMode(option.value)}
-              >
-                {option.label}
-              </button>
-            )}
-          </For>
-        </div>
-      </section>
+      </Show>
 
       <div
         class={stageClass()}
@@ -2293,6 +2524,10 @@ function App() {
                 const current = item()
                 return isImageItem(current) ? current : null
               }
+              const slideItem = () => {
+                const current = item()
+                return isSlideItem(current) ? current : null
+              }
               const pathItem = () => {
                 const current = item()
                 return isPathItem(current) ? current : null
@@ -2304,14 +2539,15 @@ function App() {
               const isSelected = () => selectedIds().includes(itemId)
               const isEditing = () => editingId() === itemId
               const style = () => itemStyle(item())
+              const isVisibleInSlideshow = () => !slideshowActive() || slideshowVisibleIds()?.has(itemId)
 
               return (
                 <div
-                  class={`canvas-item item-${item().type}${isSelected() ? ' is-selected' : ''}${isEditing() ? ' is-editing' : ''}${erasePreviewIdSet().has(itemId) ? ' is-erase-preview' : ''}`}
+                  class={`canvas-item item-${item().type}${isSelected() ? ' is-selected' : ''}${isEditing() ? ' is-editing' : ''}${erasePreviewIdSet().has(itemId) ? ' is-erase-preview' : ''}${isVisibleInSlideshow() ? '' : ' is-slideshow-hidden'}`}
                   style={style()}
                   onPointerDown={(event) => handleItemPointerDown(event, item())}
                   onDblClick={(event) => {
-                    if (isPathItem(item()) || isImageItem(item())) return
+                    if (isPathItem(item()) || isImageItem(item()) || isSlideItem(item())) return
                     event.stopPropagation()
                     setSelectedIds([itemId])
                     setEditingId(itemId)
@@ -2327,30 +2563,43 @@ function App() {
                       <Show
                         when={imageItem()}
                         fallback={
-                          <div
-                            ref={(element) => {
-                              itemContentRefs.set(itemId, element)
-                              scheduleFitItemHeight(itemId)
-                            }}
-                            class="item-content"
+                          <Show
+                            when={slideItem()}
+                            fallback={
+                              <div
+                                ref={(element) => {
+                                  itemContentRefs.set(itemId, element)
+                                  scheduleFitItemHeight(itemId)
+                                }}
+                                class="item-content"
+                              >
+                                <RichTextItem
+                                  content={textItem()?.content ?? createEmptyContent()}
+                                  editable={isEditing()}
+                                  placeholder="Double click to write"
+                                  onContentChange={(content) => {
+                                    if (!textItem()) return
+                                    updateItem(itemId, { content })
+                                  }}
+                                  onLayoutChange={() => {
+                                    scheduleFitItemHeight(itemId)
+                                  }}
+                                  onBlur={() => {
+                                    scheduleFitItemHeight(itemId)
+                                    setEditingId((current) => (current === itemId ? null : current))
+                                  }}
+                                />
+                              </div>
+                            }
                           >
-                            <RichTextItem
-                              content={textItem()?.content ?? createEmptyContent()}
-                              editable={isEditing()}
-                              placeholder="Double click to write"
-                              onContentChange={(content) => {
-                                if (!textItem()) return
-                                updateItem(itemId, { content })
-                              }}
-                              onLayoutChange={() => {
-                                scheduleFitItemHeight(itemId)
-                              }}
-                              onBlur={() => {
-                                scheduleFitItemHeight(itemId)
-                                setEditingId((current) => (current === itemId ? null : current))
-                              }}
-                            />
-                          </div>
+                            {(slideItem) => (
+                              <div class="item-content">
+                                <div class="slide-frame-shell" aria-hidden="true">
+                                  <span class="slide-frame-badge">Slide {slideOrderLookup().get(slideItem().id) ?? '?'}</span>
+                                </div>
+                              </div>
+                            )}
+                          </Show>
                         }
                       >
                         {(imageItem) => (
@@ -2369,7 +2618,11 @@ function App() {
                     {(pathItem) => <PathStroke item={pathItem()} />}
                   </Show>
 
-                  <Show when={selectedIds().length === 1 && selectedIds()[0] === itemId && !isEditing() && canResize()}>
+                  <Show
+                    when={
+                      !slideshowActive() && selectedIds().length === 1 && selectedIds()[0] === itemId && !isEditing() && canResize()
+                    }
+                  >
                     <button
                       class="resize-handle"
                       type="button"
@@ -2408,6 +2661,15 @@ function App() {
             )}
           </Show>
         </div>
+
+        <Show when={slideshowFocusRect()}>
+          {(rect) => (
+            <div
+              class="slideshow-focus-frame"
+              style={`transform: translate3d(${rect().x}px, ${rect().y}px, 0); width: ${rect().w}px; height: ${rect().h}px;`}
+            />
+          )}
+        </Show>
       </div>
     </main>
   )
