@@ -2,6 +2,12 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { toBlob } from 'html-to-image'
 import './App.css'
 import {
+  NOTE_CLIPBOARD_FALLBACK_TEXT,
+  NOTE_CLIPBOARD_MIME,
+  parseCanvasItemsFromClipboardPayload,
+  serializeCanvasItemsForClipboard,
+} from './clipboard'
+import {
   EXPORT_PNG_TEXT_KEY,
   buildExportSvg,
   encodeEmbeddedExportPayload,
@@ -572,6 +578,8 @@ function App() {
   let notePickerRef!: HTMLInputElement
   let exportRenderRef!: HTMLDivElement
   let exportPreviewObjectUrl: string | undefined
+  let inMemoryClipboard: CanvasItem[] | null = null
+  let clipboardPasteCount = 0
   const itemContentRefs = new Map<string, HTMLDivElement>()
 
   const viewportCenterWorld = (): Point => ({
@@ -751,6 +759,15 @@ function App() {
       return cloned
     })
   }
+
+  const duplicateClipboardItems = (sourceItems: CanvasItem[], offset: number) =>
+    sourceItems.map((item) => {
+      const cloned = cloneCanvasItem(item)
+      cloned.id = createId()
+      cloned.x = Math.round((cloned.x + offset) * 1000) / 1000
+      cloned.y = Math.round((cloned.y + offset) * 1000) / 1000
+      return cloned
+    })
 
   const growItemHeight = (id: string, height: number) => {
     setItems((current) =>
@@ -1148,6 +1165,35 @@ function App() {
     setTool('selection')
   }
 
+  const copySelectedItems = (clipboardData?: DataTransfer | null) => {
+    const selection = selectedItems().map(cloneCanvasItem)
+    if (!selection.length) return false
+
+    inMemoryClipboard = selection
+    clipboardPasteCount = 0
+
+    if (clipboardData) {
+      const payload = serializeCanvasItemsForClipboard(selection)
+      clipboardData.setData(NOTE_CLIPBOARD_MIME, payload)
+      clipboardData.setData('text/plain', NOTE_CLIPBOARD_FALLBACK_TEXT)
+    }
+
+    return true
+  }
+
+  const pasteClipboardItems = (sourceItems: CanvasItem[]) => {
+    if (!sourceItems.length) return false
+
+    clipboardPasteCount += 1
+    const offset = 24 * clipboardPasteCount
+    const nextItems = duplicateClipboardItems(sourceItems, offset)
+    setItems((current) => [...current, ...nextItems])
+    setSelectedIds(nextItems.map((item) => item.id))
+    setEditingId(null)
+    setTool('selection')
+    return true
+  }
+
   const openImagePicker = () => {
     imagePickerRef?.click()
   }
@@ -1505,7 +1551,20 @@ function App() {
   }
 
   const handlePaste = (event: ClipboardEvent) => {
-    if (isEditableTarget(event.target)) return
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+
+    const clipboardPayload = event.clipboardData?.getData(NOTE_CLIPBOARD_MIME)
+    const clipboardMarker = event.clipboardData?.getData('text/plain')
+    const clipboardItems =
+      (clipboardPayload ? parseCanvasItemsFromClipboardPayload(clipboardPayload) : null) ??
+      (clipboardMarker === NOTE_CLIPBOARD_FALLBACK_TEXT ? inMemoryClipboard : null) ??
+      (!event.clipboardData || event.clipboardData.types.length === 0 ? inMemoryClipboard : null)
+
+    if (clipboardItems?.length) {
+      event.preventDefault()
+      pasteClipboardItems(clipboardItems)
+      return
+    }
 
     const files =
       event.clipboardData?.items
@@ -1519,6 +1578,19 @@ function App() {
 
     event.preventDefault()
     void pasteImageFiles(files)
+  }
+
+  const handleCopy = (event: ClipboardEvent) => {
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+    if (!copySelectedItems(event.clipboardData)) return
+    event.preventDefault()
+  }
+
+  const handleCut = (event: ClipboardEvent) => {
+    if (isEditableTarget(event.target) || templateModalOpen() || exportModalOpen()) return
+    if (!copySelectedItems(event.clipboardData)) return
+    event.preventDefault()
+    deleteSelected()
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1549,6 +1621,34 @@ function App() {
     if (isEditableTarget(event.target)) {
       if (event.key === 'Escape') setEditingId(null)
       return
+    }
+
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      const key = event.key.toLowerCase()
+
+      if (key === 'o') {
+        event.preventDefault()
+        void openNotePicker()
+        return
+      }
+
+      if (key === 's') {
+        event.preventDefault()
+        if (canSaveToCurrentFile()) {
+          void saveToCurrentFile()
+        } else {
+          saveNoteToFile()
+        }
+        return
+      }
+
+      if (key === 'a') {
+        event.preventDefault()
+        setSelectedIds(items().map((item) => item.id))
+        setEditingId(null)
+        setTool('selection')
+        return
+      }
     }
 
     if (event.key === 'Escape') {
@@ -1624,6 +1724,8 @@ function App() {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('copy', handleCopy)
+    window.addEventListener('cut', handleCut)
     window.addEventListener('paste', handlePaste)
     window.addEventListener('beforeunload', persistLocalSnapshot)
     window.addEventListener('pagehide', persistLocalSnapshot)
@@ -1639,6 +1741,8 @@ function App() {
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
+    window.removeEventListener('copy', handleCopy)
+    window.removeEventListener('cut', handleCut)
     window.removeEventListener('paste', handlePaste)
     window.removeEventListener('beforeunload', persistLocalSnapshot)
     window.removeEventListener('pagehide', persistLocalSnapshot)
@@ -1731,18 +1835,20 @@ function App() {
         <Show when={appMenuOpen()}>
           <div class="app-menu-panel" role="menu" aria-label="Notebook actions">
             <button class="app-menu-item" type="button" role="menuitem" onClick={() => void openNotePicker()}>
-              Open
+              <span class="app-menu-item-text">Open</span>
+              <span class="app-menu-item-shortcut">Ctrl+O</span>
             </button>
             <button class="app-menu-item" type="button" role="menuitem" onClick={openTemplateModal}>
-              Templateから作成
+              <span class="app-menu-item-text">Templateから作成</span>
             </button>
             <Show when={canSaveToCurrentFile()}>
               <button class="app-menu-item" type="button" role="menuitem" onClick={() => void saveToCurrentFile()}>
-                Save to current file
+                <span class="app-menu-item-text">Save to current file</span>
+                <span class="app-menu-item-shortcut">Ctrl+S</span>
               </button>
             </Show>
             <button class="app-menu-item" type="button" role="menuitem" onClick={saveNoteToFile}>
-              Save to...
+              <span class="app-menu-item-text">Save to...</span>
             </button>
             <button
               class="app-menu-item"
@@ -1751,10 +1857,10 @@ function App() {
               onClick={openExportModal}
               disabled={items().length === 0}
             >
-              Export Image
+              <span class="app-menu-item-text">Export Image</span>
             </button>
             <button class="app-menu-item is-danger" type="button" role="menuitem" onClick={clearBoard}>
-              Reset note
+              <span class="app-menu-item-text">Reset note</span>
             </button>
           </div>
         </Show>

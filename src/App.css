@@ -184,12 +184,27 @@
 }
 
 .app-menu-item {
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
+  gap: 12px;
   width: 100%;
   min-height: 42px;
   padding: 0 14px;
   border-radius: 14px;
   font-size: 14px;
+}
+
+.app-menu-item-text {
+  min-width: 0;
+}
+
+.app-menu-item-shortcut {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .app-menu-item:disabled {
