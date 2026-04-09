@@ -539,6 +539,8 @@ function App() {
     const ids = new Set(selectedIds())
     return items().filter((item) => ids.has(item.id))
   })
+  const itemLookup = createMemo(() => new Map(items().map((item) => [item.id, item] as const)))
+  const itemIds = createMemo(() => items().map((item) => item.id))
   const selectedItem = createMemo(() => (selectedItems().length === 1 ? selectedItems()[0] : undefined))
   const selectedCount = createMemo(() => selectedItems().length)
   const zoomLabel = createMemo(() => `${Math.round(view().zoom * 100)}%`)
@@ -1609,55 +1611,68 @@ function App() {
           class="canvas-world"
           style={`transform: translate3d(${view().x}px, ${view().y}px, 0) scale(${view().zoom});`}
         >
-          <For each={items()}>
-            {(item) => {
-              const isSelected = () => selectedIds().includes(item.id)
-              const isEditing = () => editingId() === item.id
-              const style = () => itemStyle(item)
+          <For each={itemIds()}>
+            {(itemId) => {
+              const item = () => itemLookup().get(itemId)!
+              const imageItem = () => {
+                const current = item()
+                return isImageItem(current) ? current : null
+              }
+              const pathItem = () => {
+                const current = item()
+                return isPathItem(current) ? current : null
+              }
+              const textItem = () => {
+                const current = item()
+                return isTextCanvasItem(current) ? current : null
+              }
+              const isSelected = () => selectedIds().includes(itemId)
+              const isEditing = () => editingId() === itemId
+              const style = () => itemStyle(item())
 
               return (
                 <div
-                  class={`canvas-item item-${item.type}${isSelected() ? ' is-selected' : ''}${isEditing() ? ' is-editing' : ''}${erasePreviewIdSet().has(item.id) ? ' is-erase-preview' : ''}`}
+                  class={`canvas-item item-${item().type}${isSelected() ? ' is-selected' : ''}${isEditing() ? ' is-editing' : ''}${erasePreviewIdSet().has(itemId) ? ' is-erase-preview' : ''}`}
                   style={style()}
-                  onPointerDown={(event) => handleItemPointerDown(event, item)}
+                  onPointerDown={(event) => handleItemPointerDown(event, item())}
                   onDblClick={(event) => {
-                    if (isPathItem(item) || isImageItem(item)) return
+                    if (isPathItem(item()) || isImageItem(item())) return
                     event.stopPropagation()
-                    setSelectedIds([item.id])
-                    setEditingId(item.id)
+                    setSelectedIds([itemId])
+                    setEditingId(itemId)
                   }}
                 >
-                  <Show when={item.type === 'diamond'}>
+                  <Show when={item().type === 'diamond'}>
                     <div class="diamond-fill" />
                   </Show>
 
                   <Show
-                    when={isPathItem(item)}
+                    when={pathItem()}
                     fallback={
                       <Show
-                        when={isImageItem(item) ? item : null}
+                        when={imageItem()}
                         fallback={
                           <div
                             ref={(element) => {
-                              itemContentRefs.set(item.id, element)
-                              scheduleFitItemHeight(item.id)
+                              itemContentRefs.set(itemId, element)
+                              scheduleFitItemHeight(itemId)
                             }}
                             class="item-content"
                           >
                             <RichTextItem
-                              content={isTextCanvasItem(item) ? item.content : createEmptyContent()}
+                              content={textItem()?.content ?? createEmptyContent()}
                               editable={isEditing()}
                               placeholder="Double click to write"
                               onContentChange={(content) => {
-                                if (!isTextCanvasItem(item)) return
-                                updateItem(item.id, { content })
+                                if (!textItem()) return
+                                updateItem(itemId, { content })
                               }}
                               onLayoutChange={() => {
-                                scheduleFitItemHeight(item.id)
+                                scheduleFitItemHeight(itemId)
                               }}
                               onBlur={() => {
-                                scheduleFitItemHeight(item.id)
-                                setEditingId((current) => (current === item.id ? null : current))
+                                scheduleFitItemHeight(itemId)
+                                setEditingId((current) => (current === itemId ? null : current))
                               }}
                             />
                           </div>
@@ -1676,15 +1691,15 @@ function App() {
                       </Show>
                     }
                   >
-                    <PathStroke item={item as PathCanvasItem} />
+                    {(pathItem) => <PathStroke item={pathItem()} />}
                   </Show>
 
-                  <Show when={selectedIds().length === 1 && selectedIds()[0] === item.id && !isEditing() && canResize()}>
+                  <Show when={selectedIds().length === 1 && selectedIds()[0] === itemId && !isEditing() && canResize()}>
                     <button
                       class="resize-handle"
                       type="button"
                       aria-label="Resize item"
-                      onPointerDown={(event) => handleResizePointerDown(event, item)}
+                      onPointerDown={(event) => handleResizePointerDown(event, item())}
                     />
                   </Show>
                 </div>
