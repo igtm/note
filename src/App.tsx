@@ -1,5 +1,16 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { toBlob } from 'html-to-image'
 import './App.css'
+import {
+  EXPORT_PNG_TEXT_KEY,
+  EXPORT_SVG_METADATA_ID,
+  buildExportSvg,
+  encodeEmbeddedExportPayload,
+  getItemBounds,
+  injectPngTextChunk,
+  parseEmbeddedExportPayload,
+  readPngTextChunk,
+} from './exportImage'
 import { RichTextItem } from './RichTextItem'
 import {
   createDefaultItemStyle,
@@ -527,6 +538,14 @@ function App() {
   const [erasePreviewIds, setErasePreviewIds] = createSignal<string[]>([])
   const [saveState, setSaveState] = createSignal('autosaved locally')
   const [shareState, setShareState] = createSignal('start with pnpm share on your LAN')
+  const [exportModalOpen, setExportModalOpen] = createSignal(false)
+  const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
+  const [exportIncludeBackground, setExportIncludeBackground] = createSignal(true)
+  const [exportDarkMode, setExportDarkMode] = createSignal(false)
+  const [exportEmbedData, setExportEmbedData] = createSignal(false)
+  const [exportBusy, setExportBusy] = createSignal<'png' | 'svg' | 'clipboard' | null>(null)
+  const [exportError, setExportError] = createSignal<string | null>(null)
+  const [exportPreviewUrl, setExportPreviewUrl] = createSignal<string | null>(null)
   const shareClientId = createId()
   let applyingRemote = false
   let remoteRevision = 0
@@ -535,6 +554,8 @@ function App() {
   let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
   let imagePickerRef!: HTMLInputElement
+  let exportRenderRef!: HTMLDivElement
+  let exportPreviewObjectUrl: string | undefined
   const itemContentRefs = new Map<string, HTMLDivElement>()
 
   const viewportCenterWorld = (): Point => ({
@@ -570,6 +591,20 @@ function App() {
   const selectedPathItems = createMemo(() => selectedItems().filter(isPathItem))
   const erasePreviewIdSet = createMemo(() => new Set(erasePreviewIds()))
   const resolvedTheme = createMemo<ResolvedTheme>(() => resolveTheme(themeMode(), systemTheme()))
+  const canExportSelection = createMemo(() => selectedCount() > 0)
+  const exportTargetItems = createMemo(() =>
+    exportOnlySelected() && canExportSelection() ? selectedItems() : items(),
+  )
+  const exportScene = createMemo(() =>
+    exportModalOpen()
+      ? buildExportSvg({
+          items: exportTargetItems(),
+          onlySelected: exportOnlySelected() && canExportSelection(),
+          includeBackground: exportIncludeBackground(),
+          darkMode: exportDarkMode(),
+        })
+      : null,
+  )
   const draftShape = createMemo(() => {
     const active = interaction()
     if (active?.kind !== 'createShape') return null
@@ -653,6 +688,33 @@ function App() {
     if (tool() !== 'eraser') setErasePreviewIds([])
   })
 
+  createEffect(() => {
+    if (!exportModalOpen()) {
+      if (exportPreviewObjectUrl) {
+        URL.revokeObjectURL(exportPreviewObjectUrl)
+        exportPreviewObjectUrl = undefined
+      }
+      setExportPreviewUrl(null)
+      return
+    }
+
+    const scene = exportScene()
+    if (!scene) {
+      setExportPreviewUrl(null)
+      return
+    }
+
+    const url = URL.createObjectURL(new Blob([scene.svg], { type: 'image/svg+xml;charset=utf-8' }))
+    if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
+    exportPreviewObjectUrl = url
+    setExportPreviewUrl(url)
+  })
+
+  createEffect(() => {
+    if (canExportSelection()) return
+    if (exportOnlySelected()) setExportOnlySelected(false)
+  })
+
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
     setItems((current) =>
       current.map((item): CanvasItem => (item.id === id ? ({ ...item, ...patch } as CanvasItem) : item)),
@@ -669,6 +731,23 @@ function App() {
   }
 
   const updateSelectedItems = (patch: Partial<CanvasItem>) => updateSelectedItemsWhere(() => true, patch)
+
+  const cloneCanvasItem = (item: CanvasItem): CanvasItem => JSON.parse(JSON.stringify(item)) as CanvasItem
+
+  const placeImportedItems = (sourceItems: CanvasItem[], index: number) => {
+    const center = viewportCenterWorld()
+    const bounds = getItemBounds(sourceItems)
+    const offsetX = center.x - (bounds.x + bounds.w / 2) + index * 24
+    const offsetY = center.y - (bounds.y + bounds.h / 2) + index * 24
+
+    return sourceItems.map((item) => {
+      const cloned = cloneCanvasItem(item)
+      cloned.id = createId()
+      cloned.x = Math.round((cloned.x + offsetX) * 1000) / 1000
+      cloned.y = Math.round((cloned.y + offsetY) * 1000) / 1000
+      return cloned
+    })
+  }
 
   const growItemHeight = (id: string, height: number) => {
     setItems((current) =>
@@ -862,6 +941,150 @@ function App() {
     }
   }
 
+  const parseEmbeddedItems = (encoded: string): CanvasItem[] | null => {
+    const parsed = parseEmbeddedExportPayload(encoded)
+    if (!parsed || typeof parsed !== 'object' || !('items' in parsed)) return null
+    const normalized = normalizeStoredNotebook({
+      items: (parsed as { items: unknown }).items,
+      view: defaultView(),
+    })
+    return normalized?.items ?? null
+  }
+
+  const readEmbeddedPayloadFromSvg = (source: string) => {
+    if (typeof DOMParser === 'undefined') return null
+    const document = new DOMParser().parseFromString(source, 'image/svg+xml')
+    return document.querySelector(`metadata#${EXPORT_SVG_METADATA_ID}`)?.textContent ?? null
+  }
+
+  const readEmbeddedItemsFromFile = async (file: File) => {
+    if (file.type === 'image/png') {
+      const payload = readPngTextChunk(await file.arrayBuffer(), EXPORT_PNG_TEXT_KEY)
+      return payload ? parseEmbeddedItems(payload) : null
+    }
+
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      const payload = readEmbeddedPayloadFromSvg(await file.text())
+      return payload ? parseEmbeddedItems(payload) : null
+    }
+
+    return null
+  }
+
+  const createImageItemFromFile = async (file: File, index: number): Promise<CanvasItem> => {
+    const center = viewportCenterWorld()
+    const src = await readFileAsDataUrl(file)
+    const imageSize = await measureImage(src).catch(() => ({ width: 320, height: 240 }))
+    const size = fitImageWithinFrame(imageSize.width, imageSize.height)
+
+    return {
+      id: createId(),
+      type: 'image',
+      x: Math.round(center.x - size.w / 2 + index * 24),
+      y: Math.round(center.y - size.h / 2 + index * 24),
+      w: size.w,
+      h: size.h,
+      src,
+      mimeType: file.type || undefined,
+      name: file.name || undefined,
+      ...createDefaultItemStyle('image'),
+    } as CanvasItem
+  }
+
+  const createExportPayload = () => {
+    const exportItems = exportTargetItems()
+    return exportEmbedData() && exportItems.length ? encodeEmbeddedExportPayload(exportItems) : null
+  }
+
+  const buildSceneForExport = (embedPayload?: string | null) =>
+    buildExportSvg({
+      items: exportTargetItems(),
+      onlySelected: exportOnlySelected() && canExportSelection(),
+      includeBackground: exportIncludeBackground(),
+      darkMode: exportDarkMode(),
+      embedPayload,
+    })
+
+  const downloadBlob = (filename: string, blob: Blob) => {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  const renderSceneToPngBlob = async (
+    scene: NonNullable<ReturnType<typeof buildSceneForExport>>,
+    payload?: string | null,
+  ) => {
+    if (!exportRenderRef) throw new Error('Export render surface is unavailable')
+
+    await Promise.resolve()
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    if ('fonts' in document) {
+      await document.fonts.ready.catch(() => undefined)
+    }
+
+    const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+    const blob = await toBlob(exportRenderRef, {
+      width: scene.width,
+      height: scene.height,
+      canvasWidth: Math.ceil(scene.width * scale),
+      canvasHeight: Math.ceil(scene.height * scale),
+      pixelRatio: 1,
+      cacheBust: true,
+      preferredFontFormat: 'woff2',
+    })
+    if (!blob) throw new Error('Failed to encode PNG export')
+    if (!payload) return blob
+
+    const arrayBuffer = await blob.arrayBuffer()
+    const embedded = injectPngTextChunk(arrayBuffer, EXPORT_PNG_TEXT_KEY, payload)
+    return new Blob([embedded], { type: 'image/png' })
+  }
+
+  const runExportAction = async (
+    kind: 'png' | 'svg' | 'clipboard',
+    action: (scene: NonNullable<ReturnType<typeof buildSceneForExport>>, payload: string | null) => Promise<void>,
+  ) => {
+    const payload = createExportPayload()
+    const scene = buildSceneForExport(kind === 'svg' ? payload : null)
+    if (!scene) return
+
+    setExportError(null)
+    setExportBusy(kind)
+    try {
+      await action(scene, payload)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Export failed')
+    } finally {
+      setExportBusy(null)
+    }
+  }
+
+  const exportAsSvg = () =>
+    runExportAction('svg', async (scene) => {
+      downloadBlob(`${scene.filenameBase}.svg`, new Blob([scene.svg], { type: 'image/svg+xml;charset=utf-8' }))
+    })
+
+  const exportAsPng = () =>
+    runExportAction('png', async (scene, payload) => {
+      const blob = await renderSceneToPngBlob(scene, payload)
+      downloadBlob(`${scene.filenameBase}.png`, blob)
+    })
+
+  const copyExportToClipboard = () =>
+    runExportAction('clipboard', async (scene, payload) => {
+      if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+        throw new Error('Clipboard image export is not available in this browser')
+      }
+      const blob = await renderSceneToPngBlob(scene, payload)
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    })
+
   const screenToWorld = (clientX: number, clientY: number): Point => {
     const rect = stageRef.getBoundingClientRect()
     const current = view()
@@ -932,27 +1155,15 @@ function App() {
   const pasteImageFiles = async (files: File[]) => {
     if (!files.length) return
 
-    const center = viewportCenterWorld()
-    const nextItems = await Promise.all(
-      files.map(async (file, index) => {
-        const src = await readFileAsDataUrl(file)
-        const imageSize = await measureImage(src).catch(() => ({ width: 320, height: 240 }))
-        const size = fitImageWithinFrame(imageSize.width, imageSize.height)
-
-        return {
-          id: createId(),
-          type: 'image',
-          x: Math.round(center.x - size.w / 2 + index * 24),
-          y: Math.round(center.y - size.h / 2 + index * 24),
-          w: size.w,
-          h: size.h,
-          src,
-          mimeType: file.type || undefined,
-          name: file.name || undefined,
-          ...createDefaultItemStyle('image'),
-        } as CanvasItem
-      }),
-    )
+    const nextItems: CanvasItem[] = []
+    for (const [index, file] of files.entries()) {
+      const restoredItems = await readEmbeddedItemsFromFile(file)
+      if (restoredItems?.length) {
+        nextItems.push(...placeImportedItems(restoredItems, index))
+        continue
+      }
+      nextItems.push(await createImageItemFromFile(file, index))
+    }
 
     setItems((current) => [...current, ...nextItems])
     setSelectedIds(nextItems.map((item) => item.id))
@@ -962,6 +1173,22 @@ function App() {
 
   const openImagePicker = () => {
     imagePickerRef?.click()
+  }
+
+  const openExportModal = () => {
+    setExportOnlySelected(canExportSelection())
+    setExportIncludeBackground(true)
+    setExportDarkMode(resolvedTheme() === 'dark')
+    setExportEmbedData(false)
+    setExportBusy(null)
+    setExportError(null)
+    setExportModalOpen(true)
+  }
+
+  const closeExportModal = () => {
+    setExportBusy(null)
+    setExportModalOpen(false)
+    setExportError(null)
   }
 
   const handleImagePickerChange = (event: Event & { currentTarget: HTMLInputElement }) => {
@@ -1277,6 +1504,14 @@ function App() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (exportModalOpen()) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeExportModal()
+      }
+      return
+    }
+
     if (isEditableTarget(event.target)) {
       if (event.key === 'Escape') setEditingId(null)
       return
@@ -1361,6 +1596,7 @@ function App() {
   onCleanup(() => {
     clearShareTimers()
     if (workspaceMode() === 'shared') sendShareLeave()
+    if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
@@ -1420,6 +1656,20 @@ function App() {
           <button
             class="action-button"
             type="button"
+            title="Export image"
+            aria-label="Export image"
+            onClick={openExportModal}
+            disabled={items().length === 0}
+          >
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4v10" />
+              <path d="m8.5 10.5 3.5 3.5 3.5-3.5" />
+              <path d="M5 18h14" />
+            </svg>
+          </button>
+          <button
+            class="action-button"
+            type="button"
             title="Insert image"
             aria-label="Insert image"
             onClick={openImagePicker}
@@ -1473,6 +1723,154 @@ function App() {
         aria-hidden="true"
         onChange={handleImagePickerChange}
       />
+
+      <Show when={exportModalOpen()}>
+        <div class="export-modal-backdrop" onPointerDown={closeExportModal}>
+          <section
+            class="export-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-modal-title"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div class="export-preview-panel">
+              <div class="export-preview-header">
+                <div>
+                  <p class="eyebrow">Export</p>
+                  <h2 id="export-modal-title">Image export</h2>
+                </div>
+                <button class="export-close-button" type="button" aria-label="Close export modal" onClick={closeExportModal}>
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 6 12 12" />
+                    <path d="m18 6-12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="export-preview-stage">
+                <Show
+                  when={exportPreviewUrl()}
+                  fallback={<div class="export-preview-empty">Nothing to export yet.</div>}
+                >
+                  {(previewUrl) => <img class="export-preview-image" src={previewUrl()} alt="Export preview" />}
+                </Show>
+              </div>
+
+              <div class="export-preview-meta">
+                <span>{exportOnlySelected() && canExportSelection() ? 'Selection' : 'Canvas'}</span>
+                <span>{exportScene() ? `${exportScene()!.width} × ${exportScene()!.height}` : 'No content'}</span>
+              </div>
+            </div>
+
+            <div class="export-controls-panel">
+              <label class={canExportSelection() ? 'export-toggle-row' : 'export-toggle-row is-disabled'}>
+                <div class="export-toggle-copy">
+                  <strong>Only Selected</strong>
+                  <span>Current selection only. Enabled only when something is selected.</span>
+                </div>
+                <span class="export-toggle">
+                  <input
+                    type="checkbox"
+                    checked={exportOnlySelected()}
+                    disabled={!canExportSelection()}
+                    onInput={(event) => setExportOnlySelected(event.currentTarget.checked)}
+                  />
+                  <span class="export-toggle-track" />
+                </span>
+              </label>
+
+              <label class="export-toggle-row">
+                <div class="export-toggle-copy">
+                  <strong>Background</strong>
+                  <span>Include the canvas paper and grid. Turn off for transparent output.</span>
+                </div>
+                <span class="export-toggle">
+                  <input
+                    type="checkbox"
+                    checked={exportIncludeBackground()}
+                    onInput={(event) => setExportIncludeBackground(event.currentTarget.checked)}
+                  />
+                  <span class="export-toggle-track" />
+                </span>
+              </label>
+
+              <label class="export-toggle-row">
+                <div class="export-toggle-copy">
+                  <strong>Dark mode</strong>
+                  <span>Render the export with the dark palette without changing the live canvas.</span>
+                </div>
+                <span class="export-toggle">
+                  <input
+                    type="checkbox"
+                    checked={exportDarkMode()}
+                    onInput={(event) => setExportDarkMode(event.currentTarget.checked)}
+                  />
+                  <span class="export-toggle-track" />
+                </span>
+              </label>
+
+              <label class="export-toggle-row">
+                <div class="export-toggle-copy">
+                  <strong>Embed Data</strong>
+                  <span>Store restorable note data inside the file. File size gets larger.</span>
+                </div>
+                <span class="export-toggle">
+                  <input
+                    type="checkbox"
+                    checked={exportEmbedData()}
+                    onInput={(event) => setExportEmbedData(event.currentTarget.checked)}
+                  />
+                  <span class="export-toggle-track" />
+                </span>
+              </label>
+
+              <Show when={exportError()}>
+                {(message) => <p class="export-error">{message()}</p>}
+              </Show>
+
+              <div class="export-action-row">
+                <button
+                  class="export-action-button"
+                  type="button"
+                  disabled={!exportScene() || exportBusy() !== null}
+                  onClick={() => void exportAsPng()}
+                >
+                  PNG
+                </button>
+                <button
+                  class="export-action-button"
+                  type="button"
+                  disabled={!exportScene() || exportBusy() !== null}
+                  onClick={() => void exportAsSvg()}
+                >
+                  SVG
+                </button>
+                <button
+                  class="export-action-button is-wide"
+                  type="button"
+                  disabled={!exportScene() || exportBusy() !== null}
+                  onClick={() => void copyExportToClipboard()}
+                >
+                  Copy to clipboard
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <Show when={exportScene()}>
+            {(scene) => (
+              <div class="export-render-capture" aria-hidden="true">
+                <div
+                  ref={exportRenderRef}
+                  class="export-render-surface"
+                  style={{ width: `${scene().width}px`, height: `${scene().height}px` }}
+                  innerHTML={scene().html}
+                />
+              </div>
+            )}
+          </Show>
+        </div>
+      </Show>
 
       <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item settings">
         <Show
