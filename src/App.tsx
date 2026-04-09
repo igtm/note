@@ -534,6 +534,7 @@ function App() {
   let pollTimer: number | undefined
   let pushTimer: number | undefined
   let stageRef!: HTMLDivElement
+  let imagePickerRef!: HTMLInputElement
   const itemContentRefs = new Map<string, HTMLDivElement>()
 
   const viewportCenterWorld = (): Point => ({
@@ -957,6 +958,16 @@ function App() {
     setSelectedIds(nextItems.map((item) => item.id))
     setEditingId(null)
     setTool('selection')
+  }
+
+  const openImagePicker = () => {
+    imagePickerRef?.click()
+  }
+
+  const handleImagePickerChange = (event: Event & { currentTarget: HTMLInputElement }) => {
+    const files = [...(event.currentTarget.files ?? [])].filter((file) => file.type.startsWith('image/'))
+    event.currentTarget.value = ''
+    void pasteImageFiles(files)
   }
 
   const startDraw = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
@@ -1409,6 +1420,20 @@ function App() {
           <button
             class="action-button"
             type="button"
+            title="Insert image"
+            aria-label="Insert image"
+            onClick={openImagePicker}
+          >
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <circle cx="9" cy="10" r="1.6" />
+              <path d="m7 17 4.1-4.1a1.4 1.4 0 0 1 2 0L17 17" />
+              <path d="m13.5 17 1.8-1.8a1.4 1.4 0 0 1 2 0L19 17" />
+            </svg>
+          </button>
+          <button
+            class="action-button"
+            type="button"
             title="Duplicate"
             aria-label="Duplicate selected"
             onClick={duplicateSelected}
@@ -1437,6 +1462,17 @@ function App() {
           </button>
         </div>
       </section>
+
+      <input
+        ref={imagePickerRef}
+        class="file-picker-input"
+        type="file"
+        accept="image/*"
+        multiple
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={handleImagePickerChange}
+      />
 
       <section class={selectedCount() > 0 ? 'inspector' : 'inspector is-empty'} aria-label="Selected item settings">
         <Show
