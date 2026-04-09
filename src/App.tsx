@@ -41,6 +41,7 @@ import {
   type ResolvedTheme,
   type ThemeMode,
 } from './theme'
+import { NOTE_FILE_MIME, NOTE_FILE_NAME, parseNoteFile, serializeNoteFile } from './noteFile'
 
 type ShapeTool = 'rect' | 'ellipse' | 'diamond'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
@@ -538,6 +539,7 @@ function App() {
   const [erasePreviewIds, setErasePreviewIds] = createSignal<string[]>([])
   const [saveState, setSaveState] = createSignal('autosaved locally')
   const [shareState, setShareState] = createSignal('start with pnpm share on your LAN')
+  const [appMenuOpen, setAppMenuOpen] = createSignal(false)
   const [exportModalOpen, setExportModalOpen] = createSignal(false)
   const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
   const [exportIncludeBackground, setExportIncludeBackground] = createSignal(true)
@@ -552,8 +554,10 @@ function App() {
   let lastSharedSignature = ''
   let pollTimer: number | undefined
   let pushTimer: number | undefined
+  let appMenuRef!: HTMLDivElement
   let stageRef!: HTMLDivElement
   let imagePickerRef!: HTMLInputElement
+  let notePickerRef!: HTMLInputElement
   let exportRenderRef!: HTMLDivElement
   let exportPreviewObjectUrl: string | undefined
   const itemContentRefs = new Map<string, HTMLDivElement>()
@@ -1016,6 +1020,29 @@ function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
   }
 
+  const currentNotebook = (): SavedNotebook => ({ items: items(), view: view() })
+
+  const switchToLocalWorkspace = () => {
+    if (workspaceMode() !== 'shared') return
+    sendShareLeave()
+    clearShareTimers()
+    remoteRevision = 0
+    lastSharedSignature = ''
+    setWorkspaceMode('local')
+    setShareState('start with pnpm share on your LAN')
+  }
+
+  const applyLoadedNotebook = (payload: SavedNotebook) => {
+    switchToLocalWorkspace()
+    setItems(payload.items)
+    setView(payload.view)
+    setSelectedIds([])
+    setEditingId(null)
+    setErasePreviewIds([])
+    setInteraction(null)
+    setTool('selection')
+  }
+
   const renderSceneToPngBlob = async (
     scene: NonNullable<ReturnType<typeof buildSceneForExport>>,
     payload?: string | null,
@@ -1175,7 +1202,20 @@ function App() {
     imagePickerRef?.click()
   }
 
+  const openNotePicker = () => {
+    setAppMenuOpen(false)
+    notePickerRef?.click()
+  }
+
+  const saveNoteToFile = () => {
+    setAppMenuOpen(false)
+    const source = serializeNoteFile(currentNotebook())
+    downloadBlob(NOTE_FILE_NAME, new Blob([source], { type: NOTE_FILE_MIME }))
+    setSaveState('saved to .note file')
+  }
+
   const openExportModal = () => {
+    setAppMenuOpen(false)
     setExportOnlySelected(canExportSelection())
     setExportIncludeBackground(true)
     setExportDarkMode(resolvedTheme() === 'dark')
@@ -1189,6 +1229,27 @@ function App() {
     setExportBusy(null)
     setExportModalOpen(false)
     setExportError(null)
+  }
+
+  const handleNotePickerChange = async (event: Event & { currentTarget: HTMLInputElement }) => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+
+    try {
+      const parsed = parseNoteFile(await file.text())
+      if (!parsed) {
+        alert('この .note ファイルは読み込めませんでした。')
+        return
+      }
+
+      closeExportModal()
+      setAppMenuOpen(false)
+      applyLoadedNotebook(parsed)
+      setSaveState(`opened ${file.name}`)
+    } catch {
+      alert('この .note ファイルは読み込めませんでした。')
+    }
   }
 
   const handleImagePickerChange = (event: Event & { currentTarget: HTMLInputElement }) => {
@@ -1262,11 +1323,15 @@ function App() {
   const resetView = () => setView(defaultView())
 
   const clearBoard = () => {
-    if (!confirm('キャンバス上のノートをすべて削除しますか？')) return
+    setAppMenuOpen(false)
+    if (!confirm('このノートを初期状態に戻しますか？')) return
     setItems([])
+    setView(defaultView())
     setSelectedIds([])
     setEditingId(null)
     setErasePreviewIds([])
+    setInteraction(null)
+    setTool('selection')
   }
 
   const handleStagePointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
@@ -1512,6 +1577,14 @@ function App() {
       return
     }
 
+    if (appMenuOpen()) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setAppMenuOpen(false)
+      }
+      return
+    }
+
     if (isEditableTarget(event.target)) {
       if (event.key === 'Escape') setEditingId(null)
       return
@@ -1574,12 +1647,19 @@ function App() {
 
   onMount(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleWindowPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!appMenuOpen() || !(target instanceof Node)) return
+      if (appMenuRef?.contains(target)) return
+      setAppMenuOpen(false)
+    }
     const handleThemeChange = (event: MediaQueryListEvent) => {
       setSystemTheme(event.matches ? 'dark' : 'light')
     }
 
     setSystemTheme(media.matches ? 'dark' : 'light')
     media.addEventListener('change', handleThemeChange)
+    window.addEventListener('pointerdown', handleWindowPointerDown)
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
@@ -1590,6 +1670,7 @@ function App() {
 
     onCleanup(() => {
       media.removeEventListener('change', handleThemeChange)
+      window.removeEventListener('pointerdown', handleWindowPointerDown)
     })
   })
 
@@ -1656,20 +1737,6 @@ function App() {
           <button
             class="action-button"
             type="button"
-            title="Export image"
-            aria-label="Export image"
-            onClick={openExportModal}
-            disabled={items().length === 0}
-          >
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4v10" />
-              <path d="m8.5 10.5 3.5 3.5 3.5-3.5" />
-              <path d="M5 18h14" />
-            </svg>
-          </button>
-          <button
-            class="action-button"
-            type="button"
             title="Insert image"
             aria-label="Insert image"
             onClick={openImagePicker}
@@ -1712,6 +1779,56 @@ function App() {
           </button>
         </div>
       </section>
+
+      <div class="app-menu" ref={appMenuRef} onPointerDown={(event) => event.stopPropagation()}>
+        <button
+          class={appMenuOpen() ? 'app-menu-button is-active' : 'app-menu-button'}
+          type="button"
+          aria-label="Notebook menu"
+          aria-haspopup="menu"
+          aria-expanded={appMenuOpen()}
+          onClick={() => setAppMenuOpen((current) => !current)}
+        >
+          <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7h14" />
+            <path d="M5 12h14" />
+            <path d="M5 17h14" />
+          </svg>
+        </button>
+
+        <Show when={appMenuOpen()}>
+          <div class="app-menu-panel" role="menu" aria-label="Notebook actions">
+            <button class="app-menu-item" type="button" role="menuitem" onClick={openNotePicker}>
+              Open
+            </button>
+            <button class="app-menu-item" type="button" role="menuitem" onClick={saveNoteToFile}>
+              Save to...
+            </button>
+            <button
+              class="app-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={openExportModal}
+              disabled={items().length === 0}
+            >
+              Export Image
+            </button>
+            <button class="app-menu-item is-danger" type="button" role="menuitem" onClick={clearBoard}>
+              Reset note
+            </button>
+          </div>
+        </Show>
+      </div>
+
+      <input
+        ref={notePickerRef}
+        class="file-picker-input"
+        type="file"
+        accept=".note,application/x-pencil-note+json,application/json"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={handleNotePickerChange}
+      />
 
       <input
         ref={imagePickerRef}
@@ -2027,9 +2144,6 @@ function App() {
           </button>
           <button type="button" onClick={resetView}>
             Reset view
-          </button>
-          <button type="button" onClick={clearBoard}>
-            Clear
           </button>
         </div>
         <div class="theme-row" aria-label="Theme controls">
