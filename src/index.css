@@ -36,6 +36,7 @@
   --workspace-active-border: rgba(131, 76, 27, 0.26);
   --workspace-active-shadow: inset 0 -2px 0 rgba(131, 76, 27, 0.1);
   --tool-icon-fill: rgba(255, 255, 255, 0.22);
+  --ink-stroke: #1f1f1f;
   --selection-outline: rgba(255, 140, 89, 0.72);
   --selection-area-border: rgba(255, 130, 82, 0.92);
   --selection-area-bg: rgba(255, 189, 145, 0.16);
@@ -102,6 +103,7 @@
   --workspace-active-border: rgba(241, 198, 126, 0.5);
   --workspace-active-shadow: inset 0 -2px 0 rgba(77, 46, 13, 0.22);
   --tool-icon-fill: rgba(255, 255, 255, 0.08);
+  --ink-stroke: #ffffff;
   --selection-outline: rgba(255, 176, 111, 0.72);
   --selection-area-border: rgba(255, 176, 111, 0.92);
   --selection-area-bg: rgba(255, 176, 111, 0.14);

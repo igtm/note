@@ -207,6 +207,11 @@ const strokeDasharray = (value: StrokeStyle) =>
     dotted: '2 8',
   })[value]
 
+const LIGHT_INK_STROKE = '#1f1f1f'
+const THEME_INK_STROKE = 'var(--ink-stroke)'
+
+const resolvePathStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
+
 const verticalPadding = (element: HTMLElement) => {
   const style = getComputedStyle(element)
   return Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
@@ -481,6 +486,7 @@ const PathStroke = (props: { item: PathCanvasItem }) => {
 
   const points = createMemo(() => props.item.points.map((point) => `${point.x},${point.y}`).join(' '))
   const center = createMemo(() => props.item.points[0])
+  const stroke = createMemo(() => resolvePathStroke(props.item.stroke))
 
   return (
     <svg
@@ -497,7 +503,7 @@ const PathStroke = (props: { item: PathCanvasItem }) => {
             cx={center().x}
             cy={center().y}
             r={Math.max(strokeWidthPx(props.item.strokeWidth) * 0.75, 1.5)}
-            fill={props.item.stroke}
+            fill={stroke()}
           />
         }
       >
@@ -1305,7 +1311,7 @@ function App() {
       `min-height: ${item.h}px`,
       `height: ${item.h}px`,
       `--item-fill: ${item.color}`,
-      `--item-stroke: ${item.stroke}`,
+      `--item-stroke: ${isPathItem(item) ? resolvePathStroke(item.stroke) : item.stroke}`,
       `--item-stroke-width: ${strokeWidthPx(item.strokeWidth)}px`,
       `--item-stroke-style: ${item.strokeStyle}`,
       `--item-stroke-dash: ${strokeDasharray(item.strokeStyle)}`,
