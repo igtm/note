@@ -612,14 +612,8 @@ function App() {
   )
 
   createEffect(() => {
-    if (workspaceMode() !== 'local' || applyingRemote) return
-
-    try {
-      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify({ items: items(), view: view() }))
-      setSaveState('autosaved locally')
-    } catch {
-      setSaveState('storage unavailable')
-    }
+    if (!persistLocalSnapshot()) return
+    setSaveState('autosaved locally')
   })
 
   createEffect(() => {
@@ -853,6 +847,18 @@ function App() {
     if (workspaceMode() !== 'shared') return
     const body = JSON.stringify({ client: shareClientId })
     navigator.sendBeacon?.('/api/localnet/leave', new Blob([body], { type: 'application/json' }))
+  }
+
+  const persistLocalSnapshot = () => {
+    if (workspaceMode() !== 'local' || applyingRemote || typeof localStorage === 'undefined') return false
+
+    try {
+      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify({ items: items(), view: view() }))
+      return true
+    } catch {
+      setSaveState('storage unavailable')
+      return false
+    }
   }
 
   const screenToWorld = (clientX: number, clientY: number): Point => {
@@ -1332,7 +1338,9 @@ function App() {
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('paste', handlePaste)
+    window.addEventListener('beforeunload', persistLocalSnapshot)
     window.addEventListener('pagehide', sendShareLeave)
+    window.addEventListener('pagehide', persistLocalSnapshot)
 
     onCleanup(() => {
       media.removeEventListener('change', handleThemeChange)
@@ -1346,7 +1354,9 @@ function App() {
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('paste', handlePaste)
+    window.removeEventListener('beforeunload', persistLocalSnapshot)
     window.removeEventListener('pagehide', sendShareLeave)
+    window.removeEventListener('pagehide', persistLocalSnapshot)
   })
 
   return (

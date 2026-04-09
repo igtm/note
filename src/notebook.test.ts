@@ -149,6 +149,45 @@ describe('normalizeStoredNotebook', () => {
     })
   })
 
+  it('accepts single-point path items for tiny pencil dots', () => {
+    const notebook = normalizeStoredNotebook({
+      items: [
+        {
+          id: 'path-dot',
+          type: 'path',
+          x: 5,
+          y: 7,
+          w: 20,
+          h: 20,
+          points: [{ x: 10, y: 10 }],
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+
+    expect(notebook).toEqual({
+      items: [
+        {
+          id: 'path-dot',
+          type: 'path',
+          x: 5,
+          y: 7,
+          w: 20,
+          h: 20,
+          points: [{ x: 10, y: 10 }],
+          color: 'transparent',
+          stroke: '#1f1f1f',
+          strokeWidth: 'medium',
+          strokeStyle: 'solid',
+          fontFamily: 'hand',
+          fontSize: 'md',
+          textAlign: 'center',
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+  })
+
   it('accepts image items and injects image defaults', () => {
     const notebook = normalizeStoredNotebook({
       items: [

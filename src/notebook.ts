@@ -402,7 +402,7 @@ export const normalizeStoredItem = (value: unknown): CanvasItem | null => {
   const styled = withDefaultItemStyle(value as { type: ItemType } & Partial<ItemStyle>)
 
   if (value.type === 'path') {
-    if (!Array.isArray(value.points) || !value.points.every(isPathPoint) || value.points.length < 2) return null
+    if (!Array.isArray(value.points) || !value.points.every(isPathPoint) || value.points.length < 1) return null
 
     return {
       id: value.id,
