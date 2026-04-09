@@ -7,8 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "preview": "vite preview",
-    "share": "pnpm build && node scripts/localnet-share.mjs"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@tiptap/core": "^3.22.2",

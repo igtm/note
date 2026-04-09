@@ -45,14 +45,27 @@ import { NOTE_FILE_MIME, NOTE_FILE_NAME, parseNoteFile, serializeNoteFile } from
 
 type ShapeTool = 'rect' | 'ellipse' | 'diamond'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
-type WorkspaceMode = 'local' | 'shared'
 
-type SharedStateResponse = {
-  ok: boolean
-  revision: number
-  payload: unknown | null
-  clients: number
-  empty: boolean
+type NoteFileHandle = {
+  name: string
+  getFile(): Promise<File>
+  createWritable(): Promise<{
+    write(data: Blob | BufferSource | string): Promise<void>
+    close(): Promise<void>
+  }>
+  queryPermission?(descriptor?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>
+  requestPermission?(descriptor?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>
+}
+
+type OpenFilePickerWindow = Window & {
+  showOpenFilePicker?: (options?: {
+    multiple?: boolean
+    excludeAcceptAllOption?: boolean
+    types?: Array<{
+      description?: string
+      accept: Record<string, string[]>
+    }>
+  }) => Promise<NoteFileHandle[]>
 }
 
 type Point = {
@@ -186,7 +199,6 @@ const TEXT_ALIGN_OPTIONS: { value: TextAlign; label: string }[] = [
 const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
-const stableStringify = (notebook: SavedNotebook) => JSON.stringify(notebook)
 const unique = (values: string[]) => [...new Set(values)]
 
 const isShapeTool = (value: Tool): value is ShapeTool => ['rect', 'ellipse', 'diamond'].includes(value)
@@ -529,7 +541,6 @@ function App() {
   const saved = loadNotebook()
   const [items, setItems] = createSignal<CanvasItem[]>(saved.items)
   const [view, setView] = createSignal<Viewport>(saved.view)
-  const [workspaceMode, setWorkspaceMode] = createSignal<WorkspaceMode>('local')
   const [themeMode, setThemeMode] = createSignal<ThemeMode>(loadThemeMode())
   const [systemTheme, setSystemTheme] = createSignal<ResolvedTheme>(getSystemTheme())
   const [tool, setTool] = createSignal<Tool>('selection')
@@ -538,7 +549,6 @@ function App() {
   const [interaction, setInteraction] = createSignal<Interaction | null>(null)
   const [erasePreviewIds, setErasePreviewIds] = createSignal<string[]>([])
   const [saveState, setSaveState] = createSignal('autosaved locally')
-  const [shareState, setShareState] = createSignal('start with pnpm share on your LAN')
   const [appMenuOpen, setAppMenuOpen] = createSignal(false)
   const [exportModalOpen, setExportModalOpen] = createSignal(false)
   const [exportOnlySelected, setExportOnlySelected] = createSignal(false)
@@ -548,12 +558,8 @@ function App() {
   const [exportBusy, setExportBusy] = createSignal<'png' | 'svg' | 'clipboard' | null>(null)
   const [exportError, setExportError] = createSignal<string | null>(null)
   const [exportPreviewUrl, setExportPreviewUrl] = createSignal<string | null>(null)
-  const shareClientId = createId()
-  let applyingRemote = false
-  let remoteRevision = 0
-  let lastSharedSignature = ''
-  let pollTimer: number | undefined
-  let pushTimer: number | undefined
+  const [currentNoteFileHandle, setCurrentNoteFileHandle] = createSignal<NoteFileHandle | null>(null)
+  const [currentNoteFileName, setCurrentNoteFileName] = createSignal<string | null>(null)
   let appMenuRef!: HTMLDivElement
   let stageRef!: HTMLDivElement
   let imagePickerRef!: HTMLInputElement
@@ -595,6 +601,7 @@ function App() {
   const selectedPathItems = createMemo(() => selectedItems().filter(isPathItem))
   const erasePreviewIdSet = createMemo(() => new Set(erasePreviewIds()))
   const resolvedTheme = createMemo<ResolvedTheme>(() => resolveTheme(themeMode(), systemTheme()))
+  const canSaveToCurrentFile = createMemo(() => currentNoteFileHandle() !== null)
   const canExportSelection = createMemo(() => selectedCount() > 0)
   const exportTargetItems = createMemo(() =>
     exportOnlySelected() && canExportSelection() ? selectedItems() : items(),
@@ -654,20 +661,6 @@ function App() {
   createEffect(() => {
     if (!persistLocalSnapshot()) return
     setSaveState('autosaved locally')
-  })
-
-  createEffect(() => {
-    if (workspaceMode() !== 'shared') return
-
-    const payload = { items: items(), view: view() }
-    const signature = stableStringify(payload)
-    if (applyingRemote || signature === lastSharedSignature) return
-
-    lastSharedSignature = signature
-    window.clearTimeout(pushTimer)
-    pushTimer = window.setTimeout(() => {
-      void pushSharedState(payload)
-    }, 140)
   })
 
   createEffect(() => {
@@ -825,116 +818,8 @@ function App() {
     })
   }
 
-  const clearShareTimers = () => {
-    window.clearInterval(pollTimer)
-    window.clearTimeout(pushTimer)
-    pollTimer = undefined
-    pushTimer = undefined
-  }
-
-  const applyRemoteNotebook = (payload: SavedNotebook) => {
-    applyingRemote = true
-    setItems(payload.items)
-    setView(payload.view)
-    setSelectedIds([])
-    setEditingId(null)
-    setErasePreviewIds([])
-    setInteraction(null)
-    queueMicrotask(() => {
-      applyingRemote = false
-    })
-  }
-
-  const fetchSharedState = async () => {
-    const response = await fetch(`/api/localnet/state?client=${encodeURIComponent(shareClientId)}`, {
-      cache: 'no-store',
-    })
-    if (!response.ok) throw new Error(`Local net share returned ${response.status}`)
-    return (await response.json()) as SharedStateResponse
-  }
-
-  const pushSharedState = async (payload: SavedNotebook) => {
-    try {
-      const response = await fetch('/api/localnet/state', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ client: shareClientId, payload }),
-      })
-      if (!response.ok) throw new Error(`Local net share returned ${response.status}`)
-
-      const result = (await response.json()) as SharedStateResponse
-      remoteRevision = result.revision
-      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
-    } catch {
-      setShareState('share server disconnected')
-    }
-  }
-
-  const pollSharedState = async () => {
-    try {
-      const result = await fetchSharedState()
-      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
-
-      const payload = result.payload ? normalizeStoredNotebook(result.payload) : null
-
-      if (payload && result.revision > remoteRevision) {
-        remoteRevision = result.revision
-        lastSharedSignature = stableStringify(payload)
-        applyRemoteNotebook(payload)
-      }
-    } catch {
-      setShareState('share server unavailable')
-      clearShareTimers()
-      applyRemoteNotebook(loadNotebook())
-      setWorkspaceMode('local')
-    }
-  }
-
-  const enterSharedMode = async () => {
-    if (workspaceMode() === 'shared') return
-
-    setShareState('connecting to local net share...')
-    try {
-      const result = await fetchSharedState()
-      const payload = result.payload
-        ? normalizeStoredNotebook(result.payload) ?? { items: [], view: defaultView() }
-        : { items: [], view: defaultView() }
-
-      remoteRevision = result.revision
-      lastSharedSignature = stableStringify(payload)
-      setWorkspaceMode('shared')
-      applyRemoteNotebook(payload)
-      setTool('selection')
-      setShareState(`${result.clients} peer${result.clients === 1 ? '' : 's'} connected`)
-      clearShareTimers()
-      pollTimer = window.setInterval(() => {
-        void pollSharedState()
-      }, 650)
-    } catch {
-      setWorkspaceMode('local')
-      setShareState('run pnpm share, then open the LAN URL')
-    }
-  }
-
-  const leaveSharedMode = () => {
-    if (workspaceMode() === 'local') return
-
-    sendShareLeave()
-    clearShareTimers()
-    applyRemoteNotebook(loadNotebook())
-    setTool('selection')
-    setShareState('left local net share')
-    setWorkspaceMode('local')
-  }
-
-  const sendShareLeave = () => {
-    if (workspaceMode() !== 'shared') return
-    const body = JSON.stringify({ client: shareClientId })
-    navigator.sendBeacon?.('/api/localnet/leave', new Blob([body], { type: 'application/json' }))
-  }
-
   const persistLocalSnapshot = () => {
-    if (workspaceMode() !== 'local' || applyingRemote || typeof localStorage === 'undefined') return false
+    if (typeof localStorage === 'undefined') return false
 
     try {
       localStorage.setItem(STORAGE_KEY_V2, JSON.stringify({ items: items(), view: view() }))
@@ -1022,18 +907,7 @@ function App() {
 
   const currentNotebook = (): SavedNotebook => ({ items: items(), view: view() })
 
-  const switchToLocalWorkspace = () => {
-    if (workspaceMode() !== 'shared') return
-    sendShareLeave()
-    clearShareTimers()
-    remoteRevision = 0
-    lastSharedSignature = ''
-    setWorkspaceMode('local')
-    setShareState('start with pnpm share on your LAN')
-  }
-
-  const applyLoadedNotebook = (payload: SavedNotebook) => {
-    switchToLocalWorkspace()
+  const applyLoadedNotebook = (payload: SavedNotebook, handle: NoteFileHandle | null, name: string | null) => {
     setItems(payload.items)
     setView(payload.view)
     setSelectedIds([])
@@ -1041,6 +915,79 @@ function App() {
     setErasePreviewIds([])
     setInteraction(null)
     setTool('selection')
+    setCurrentNoteFileHandle(handle)
+    setCurrentNoteFileName(name)
+  }
+
+  const openNoteFromText = (source: string, handle: NoteFileHandle | null, name: string | null) => {
+    const parsed = parseNoteFile(source)
+    if (!parsed) {
+      alert('この .note ファイルは読み込めませんでした。')
+      return false
+    }
+
+    closeExportModal()
+    setAppMenuOpen(false)
+    applyLoadedNotebook(parsed, handle, name)
+    setSaveState(`opened ${name ?? 'note file'}`)
+    return true
+  }
+
+  const openNotePicker = async () => {
+    setAppMenuOpen(false)
+    const pickerWindow = window as OpenFilePickerWindow
+    if (typeof pickerWindow.showOpenFilePicker !== 'function') {
+      notePickerRef?.click()
+      return
+    }
+
+    try {
+      const [handle] = await pickerWindow.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: true,
+        types: [
+          {
+            description: 'Pencil Note (*.note)',
+            accept: {
+              'application/octet-stream': ['.note'],
+            },
+          },
+        ],
+      })
+      if (!handle) return
+
+      const file = await handle.getFile()
+      openNoteFromText(await file.text(), handle, file.name)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      alert('この .note ファイルは読み込めませんでした。')
+    }
+  }
+
+  const saveToCurrentFile = async () => {
+    const handle = currentNoteFileHandle()
+    if (!handle) return
+
+    setAppMenuOpen(false)
+
+    try {
+      let permission = await handle.queryPermission?.({ mode: 'readwrite' })
+      if (permission !== 'granted') {
+        permission = await handle.requestPermission?.({ mode: 'readwrite' })
+      }
+      if (permission !== 'granted') {
+        alert('現在のファイルへ保存する権限がありません。')
+        return
+      }
+
+      const writable = await handle.createWritable()
+      await writable.write(serializeNoteFile(currentNotebook()))
+      await writable.close()
+      setSaveState(`saved ${currentNoteFileName() ?? handle.name}`)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      alert('現在のファイルへ保存できませんでした。')
+    }
   }
 
   const renderSceneToPngBlob = async (
@@ -1202,11 +1149,6 @@ function App() {
     imagePickerRef?.click()
   }
 
-  const openNotePicker = () => {
-    setAppMenuOpen(false)
-    notePickerRef?.click()
-  }
-
   const saveNoteToFile = () => {
     setAppMenuOpen(false)
     const source = serializeNoteFile(currentNotebook())
@@ -1237,16 +1179,7 @@ function App() {
     if (!file) return
 
     try {
-      const parsed = parseNoteFile(await file.text())
-      if (!parsed) {
-        alert('この .note ファイルは読み込めませんでした。')
-        return
-      }
-
-      closeExportModal()
-      setAppMenuOpen(false)
-      applyLoadedNotebook(parsed)
-      setSaveState(`opened ${file.name}`)
+      openNoteFromText(await file.text(), null, file.name)
     } catch {
       alert('この .note ファイルは読み込めませんでした。')
     }
@@ -1665,7 +1598,6 @@ function App() {
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('paste', handlePaste)
     window.addEventListener('beforeunload', persistLocalSnapshot)
-    window.addEventListener('pagehide', sendShareLeave)
     window.addEventListener('pagehide', persistLocalSnapshot)
 
     onCleanup(() => {
@@ -1675,47 +1607,18 @@ function App() {
   })
 
   onCleanup(() => {
-    clearShareTimers()
-    if (workspaceMode() === 'shared') sendShareLeave()
     if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('paste', handlePaste)
     window.removeEventListener('beforeunload', persistLocalSnapshot)
-    window.removeEventListener('pagehide', sendShareLeave)
     window.removeEventListener('pagehide', persistLocalSnapshot)
   })
 
   return (
     <main class="notebook-app">
       <section class="toolbar" aria-label="Canvas tools" onPointerDown={(event) => event.stopPropagation()}>
-        <div class="brand-mark">
-          <strong>pencil note</strong>
-          <span>{workspaceMode() === 'shared' ? shareState() : saveState()}</span>
-        </div>
-
-        <div class="workspace-tabs" aria-label="Notebook workspace">
-          <button
-            class={workspaceMode() === 'local' ? 'workspace-tab is-active' : 'workspace-tab'}
-            type="button"
-            title="Local notes"
-            aria-label="Local notes"
-            onClick={leaveSharedMode}
-          >
-            L
-          </button>
-          <button
-            class={workspaceMode() === 'shared' ? 'workspace-tab is-active' : 'workspace-tab'}
-            type="button"
-            title="Local net share"
-            aria-label="Local net share"
-            onClick={() => void enterSharedMode()}
-          >
-            N
-          </button>
-        </div>
-
         <div class="tool-strip">
           <For each={TOOLS}>
             {(entry) => (
@@ -1784,6 +1687,7 @@ function App() {
         <button
           class={appMenuOpen() ? 'app-menu-button is-active' : 'app-menu-button'}
           type="button"
+          title={saveState()}
           aria-label="Notebook menu"
           aria-haspopup="menu"
           aria-expanded={appMenuOpen()}
@@ -1798,9 +1702,14 @@ function App() {
 
         <Show when={appMenuOpen()}>
           <div class="app-menu-panel" role="menu" aria-label="Notebook actions">
-            <button class="app-menu-item" type="button" role="menuitem" onClick={openNotePicker}>
+            <button class="app-menu-item" type="button" role="menuitem" onClick={() => void openNotePicker()}>
               Open
             </button>
+            <Show when={canSaveToCurrentFile()}>
+              <button class="app-menu-item" type="button" role="menuitem" onClick={() => void saveToCurrentFile()}>
+                Save to current file
+              </button>
+            </Show>
             <button class="app-menu-item" type="button" role="menuitem" onClick={saveNoteToFile}>
               Save to...
             </button>
@@ -1824,7 +1733,7 @@ function App() {
         ref={notePickerRef}
         class="file-picker-input"
         type="file"
-        accept=".note,application/x-pencil-note+json,application/json"
+        accept=".note"
         tabIndex={-1}
         aria-hidden="true"
         onChange={handleNotePickerChange}

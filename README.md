@@ -9,13 +9,15 @@ pnpm install
 pnpm dev
 ```
 
-LAN 内の一時共有キャンバスを使う場合:
+## Agent Skills
+
+このリポジトリには `note-web` skill が含まれています。追加するには:
 
 ```bash
-pnpm share
+npx skills add https://github.com/igtm/note
 ```
 
-表示された `LAN URL` を同じネットワーク内の端末で開き、アプリ内の `Local net share` タブへ切り替えます。
+この skill は `.note` 形式、キャンバス item の構造、テキストやチャートを AI から組み立てる方法を説明します。
 
 ## Features
 
@@ -36,7 +38,6 @@ pnpm share
 - 箇条書きは `- `、番号付き、`- [ ]` タスクを扱え、`Tab` / `Shift + Tab` でネスト変更できる
 - テキストが要素の高さを超えたら自動で縦に伸びる
 - `localStorage` に自動保存され、ブラウザを閉じても前回の内容を復元
-- `Local net share` タブでは同一 LAN の閲覧者同士だけで同期し、`localStorage` には保存しない
 - 旧 `text: string` 保存形式は自動で TipTap JSON に移行する
 
 ## Shortcuts

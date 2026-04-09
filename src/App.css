@@ -90,7 +90,7 @@
   flex-wrap: nowrap;
   gap: 6px;
   width: auto;
-  max-width: calc(100vw - 104px);
+  max-width: calc(100vw - 84px);
   padding: 6px;
   border-radius: 18px;
   background: var(--panel-bg);
@@ -98,34 +98,11 @@
 }
 
 .toolbar .tool-strip,
-.toolbar .workspace-tabs,
 .toolbar .toolbar-actions {
   flex-wrap: nowrap;
 }
 
-.brand-mark {
-  display: none;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 18px;
-  padding-inline: 6px;
-}
-
-.brand-mark strong {
-  color: var(--ink-strong);
-  font-size: 26px;
-  letter-spacing: -0.04em;
-  line-height: 1;
-}
-
-.brand-mark span {
-  color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
 .tool-strip,
-.workspace-tabs,
 .toolbar-actions,
 .zoom-controls,
 .app-menu-panel {
@@ -136,7 +113,6 @@
 }
 
 .tool-button,
-.workspace-tab,
 .app-menu-button,
 .app-menu-item,
 .toolbar-actions button,
@@ -154,7 +130,6 @@
 }
 
 .tool-button:hover,
-.workspace-tab:hover,
 .app-menu-button:hover,
 .app-menu-item:hover,
 .toolbar-actions button:hover,
@@ -165,7 +140,6 @@
 }
 
 .tool-button:focus-visible,
-.workspace-tab:focus-visible,
 .app-menu-button:focus-visible,
 .app-menu-item:focus-visible,
 .toolbar-actions button:focus-visible,
@@ -173,33 +147,6 @@
 .resize-handle:focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
-}
-
-.workspace-tabs {
-  width: max-content;
-  max-width: 100%;
-  padding: 0 6px 0 0;
-  border-right: 1px solid var(--divider);
-  border-radius: 0;
-  background: transparent;
-}
-
-.workspace-tab {
-  display: inline-grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  padding: 0;
-  font-size: 13px;
-  font-family: var(--mono);
-  font-weight: 700;
-}
-
-.workspace-tab.is-active {
-  color: var(--active-ink);
-  background: var(--workspace-active-bg);
-  border-color: var(--workspace-active-border);
-  box-shadow: var(--workspace-active-shadow);
 }
 
 .app-menu-button {
@@ -1101,7 +1048,7 @@
 
   .toolbar {
     top: 10px;
-    max-width: calc(100vw - 84px);
+    max-width: calc(100vw - 72px);
     overflow-x: auto;
     border-radius: 18px;
   }
