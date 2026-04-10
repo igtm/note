@@ -264,7 +264,7 @@ const strokeDasharray = (value: StrokeStyle) =>
 const LIGHT_INK_STROKE = '#1f1f1f'
 const THEME_INK_STROKE = 'var(--ink-stroke)'
 
-const resolvePathStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
+const resolveThemeAwareStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
 const isLinearTool = (value: ShapeTool): value is LineCanvasItem['type'] | ArrowCanvasItem['type'] =>
   value === 'line' || value === 'arrow'
 const MIN_LINEAR_PREVIEW_LENGTH = 1
@@ -630,7 +630,7 @@ const StrokeItem = (props: { item: StrokeCanvasItem }) => {
 
   const points = createMemo(() => props.item.points.map((point) => `${point.x},${point.y}`).join(' '))
   const center = createMemo(() => props.item.points[0])
-  const stroke = createMemo(() => resolvePathStroke(props.item.stroke))
+  const stroke = createMemo(() => resolveThemeAwareStroke(props.item.stroke))
   const arrowHead = createMemo(() =>
     props.item.type === 'arrow' ? arrowHeadPoints(props.item.points, Math.max(strokeWidthPx(props.item.strokeWidth) * 4.2, 12)) : '',
   )
@@ -2050,7 +2050,7 @@ function App() {
       `min-height: ${item.h}px`,
       `height: ${item.h}px`,
       `--item-fill: ${item.color}`,
-      `--item-stroke: ${isStrokeCanvasItem(item) ? resolvePathStroke(item.stroke) : item.stroke}`,
+      `--item-stroke: ${resolveThemeAwareStroke(item.stroke)}`,
       `--item-stroke-width: ${strokeWidthPx(item.strokeWidth)}px`,
       `--item-stroke-style: ${item.strokeStyle}`,
       `--item-stroke-dash: ${strokeDasharray(item.strokeStyle)}`,

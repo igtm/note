@@ -139,7 +139,7 @@ const escapeHtml = (value: string) =>
 
 const escapeXml = escapeHtml
 
-const resolvePathStroke = (stroke: string, themeName: ExportThemeName) =>
+const resolveThemeAwareStroke = (stroke: string, themeName: ExportThemeName) =>
   stroke === LIGHT_INK_STROKE ? EXPORT_THEME[themeName].ink : stroke
 
 export const getItemBounds = (items: CanvasItem[]): Bounds => {
@@ -237,7 +237,7 @@ const getArrowHeadPoints = (item: StrokeCanvasItem, size: number) => {
 }
 
 const renderPath = (item: StrokeCanvasItem, themeName: ExportThemeName) => {
-  const stroke = resolvePathStroke(item.stroke, themeName)
+  const stroke = resolveThemeAwareStroke(item.stroke, themeName)
   if (isDotPath(item)) {
     const center = item.points[0]
     return `<svg class="path-item" width="${formatNumber(item.w)}" height="${formatNumber(item.h)}" viewBox="0 0 ${formatNumber(item.w)} ${formatNumber(item.h)}" aria-hidden="true"><circle cx="${formatNumber(center.x)}" cy="${formatNumber(center.y)}" r="${formatNumber(Math.max(strokeWidthPx(item.strokeWidth) * 0.75, 1.5))}" fill="${escapeXml(stroke)}" /></svg>`
@@ -252,7 +252,7 @@ const renderPath = (item: StrokeCanvasItem, themeName: ExportThemeName) => {
 }
 
 const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, themeName: ExportThemeName, theme: ExportTheme) => {
-  const resolvedStroke = isStrokeCanvasItem(item) ? resolvePathStroke(item.stroke, themeName) : item.stroke
+  const resolvedStroke = resolveThemeAwareStroke(item.stroke, themeName)
   const style = [
     `left:${formatNumber(item.x - bounds.x + padding)}px`,
     `top:${formatNumber(item.y - bounds.y + padding)}px`,
