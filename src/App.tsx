@@ -2926,18 +2926,15 @@ function App() {
               )
             }}
           </For>
-          <Show when={draftShape()}>
-            {(item) => {
-              const draft = item()
-              return (
+          <Show when={draftShape()} keyed>
+            {(draft) => (
               <div class={`canvas-item item-${draft.type} is-draft`} style={itemStyle(draft)}>
                 <Show when={draft.type === 'diamond'}>
                   <div class="diamond-fill" />
                 </Show>
                 {isStrokeCanvasItem(draft) ? <StrokeItem item={draft} /> : <div class="item-content" />}
               </div>
-              )
-            }}
+            )}
           </Show>
           <Show when={selectedBounds()}>
             {(box) => (
