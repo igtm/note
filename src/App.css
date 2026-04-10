@@ -1510,15 +1510,17 @@
   position: fixed;
   top: -18px;
   left: -18px;
-  z-index: 60;
+  z-index: 80;
   width: 36px;
   height: 36px;
   pointer-events: none;
   border-radius: 999px;
   background:
-    radial-gradient(circle, rgba(255, 74, 74, 0.95) 0 18%, rgba(255, 74, 74, 0.3) 38%, rgba(255, 74, 74, 0.08) 62%, transparent 72%);
-  filter: drop-shadow(0 0 12px rgba(255, 54, 54, 0.72));
-  mix-blend-mode: screen;
+    radial-gradient(circle, rgba(255, 248, 248, 0.98) 0 10%, rgba(255, 74, 74, 0.98) 20%, rgba(255, 74, 74, 0.42) 44%, rgba(255, 74, 74, 0.12) 62%, transparent 76%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.34),
+    0 0 16px rgba(255, 54, 54, 0.72);
+  filter: drop-shadow(0 0 10px rgba(255, 32, 32, 0.68));
 }
 
 @media (max-width: 900px) {

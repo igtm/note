@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { toBlob } from 'html-to-image'
 import './App.css'
 import {
@@ -2842,6 +2843,9 @@ function App() {
           )}
         </Show>
 
+      </div>
+
+      <Portal>
         <Show when={slideshowActive() && laserPointerEnabled() && laserPointer()}>
           {(point) => (
             <div
@@ -2850,7 +2854,7 @@ function App() {
             />
           )}
         </Show>
-      </div>
+      </Portal>
     </main>
   )
 }
