@@ -689,6 +689,7 @@ function App() {
   const [exportBusy, setExportBusy] = createSignal<'png' | 'svg' | 'clipboard' | null>(null)
   const [exportError, setExportError] = createSignal<string | null>(null)
   const [exportPreviewUrl, setExportPreviewUrl] = createSignal<string | null>(null)
+  const [exportPreviewPending, setExportPreviewPending] = createSignal(false)
   const [currentNoteFileHandle, setCurrentNoteFileHandle] = createSignal<NoteFileHandle | null>(null)
   const [currentNoteFileName, setCurrentNoteFileName] = createSignal<string | null>(null)
   let appMenuRef!: HTMLDivElement
@@ -697,6 +698,7 @@ function App() {
   let notePickerRef!: HTMLInputElement
   let exportRenderRef!: HTMLDivElement
   let exportPreviewObjectUrl: string | undefined
+  let exportPreviewRequestId = 0
   let inMemoryClipboard: CanvasItem[] | null = null
   let clipboardPasteCount = 0
   const itemContentRefs = new Map<string, HTMLDivElement>()
@@ -848,25 +850,43 @@ function App() {
   })
 
   createEffect(() => {
+    const requestId = ++exportPreviewRequestId
+
     if (!exportModalOpen()) {
       if (exportPreviewObjectUrl) {
         URL.revokeObjectURL(exportPreviewObjectUrl)
         exportPreviewObjectUrl = undefined
       }
+      setExportPreviewPending(false)
       setExportPreviewUrl(null)
       return
     }
 
     const scene = exportScene()
     if (!scene) {
+      setExportPreviewPending(false)
       setExportPreviewUrl(null)
       return
     }
 
-    const url = URL.createObjectURL(new Blob([scene.svg], { type: 'image/svg+xml;charset=utf-8' }))
-    if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
-    exportPreviewObjectUrl = url
-    setExportPreviewUrl(url)
+    setExportPreviewPending(true)
+    void renderSceneToPngBlob(scene)
+      .then((blob) => {
+        if (requestId !== exportPreviewRequestId || !exportModalOpen()) return
+        const url = URL.createObjectURL(blob)
+        if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
+        exportPreviewObjectUrl = url
+        setExportPreviewUrl(url)
+      })
+      .catch((error) => {
+        if (requestId !== exportPreviewRequestId) return
+        console.error(error)
+        setExportPreviewUrl(null)
+      })
+      .finally(() => {
+        if (requestId !== exportPreviewRequestId) return
+        setExportPreviewPending(false)
+      })
   })
 
   createEffect(() => {
@@ -1146,14 +1166,9 @@ function App() {
         excludeAcceptAllOption: true,
         types: [
           {
-            description: 'Pencil Note (*.note)',
+            description: 'Pencil note or embedded export',
             accept: {
               [NOTE_FILE_MIME]: [NOTE_FILE_EXTENSION],
-            },
-          },
-          {
-            description: 'Embedded export images (*.png, *.svg)',
-            accept: {
               'image/png': ['.png'],
               'image/svg+xml': ['.svg'],
             },
@@ -2348,7 +2363,11 @@ function App() {
               <div class="export-preview-stage">
                 <Show
                   when={exportPreviewUrl()}
-                  fallback={<div class="export-preview-empty">Nothing to export yet.</div>}
+                  fallback={
+                    <div class="export-preview-empty">
+                      {exportPreviewPending() ? 'Rendering preview…' : 'Nothing to export yet.'}
+                    </div>
+                  }
                 >
                   {(previewUrl) => <img class="export-preview-image" src={previewUrl()} alt="Export preview" />}
                 </Show>
