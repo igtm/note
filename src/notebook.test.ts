@@ -188,6 +188,82 @@ describe('normalizeStoredNotebook', () => {
     })
   })
 
+  it('accepts line and arrow items with stroke points', () => {
+    const notebook = normalizeStoredNotebook({
+      items: [
+        {
+          id: 'line-1',
+          type: 'line',
+          x: 10,
+          y: 12,
+          w: 120,
+          h: 40,
+          points: [
+            { x: 8, y: 10 },
+            { x: 112, y: 30 },
+          ],
+        },
+        {
+          id: 'arrow-1',
+          type: 'arrow',
+          x: 28,
+          y: 36,
+          w: 180,
+          h: 72,
+          points: [
+            { x: 12, y: 18 },
+            { x: 158, y: 54 },
+          ],
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+
+    expect(notebook).toEqual({
+      items: [
+        {
+          id: 'line-1',
+          type: 'line',
+          x: 10,
+          y: 12,
+          w: 120,
+          h: 40,
+          points: [
+            { x: 8, y: 10 },
+            { x: 112, y: 30 },
+          ],
+          color: 'transparent',
+          stroke: '#1f1f1f',
+          strokeWidth: 'medium',
+          strokeStyle: 'solid',
+          fontFamily: 'hand',
+          fontSize: 'md',
+          textAlign: 'center',
+        },
+        {
+          id: 'arrow-1',
+          type: 'arrow',
+          x: 28,
+          y: 36,
+          w: 180,
+          h: 72,
+          points: [
+            { x: 12, y: 18 },
+            { x: 158, y: 54 },
+          ],
+          color: 'transparent',
+          stroke: '#1f1f1f',
+          strokeWidth: 'medium',
+          strokeStyle: 'solid',
+          fontFamily: 'hand',
+          fontSize: 'md',
+          textAlign: 'center',
+        },
+      ],
+      view: { x: 0, y: 0, zoom: 1 },
+    })
+  })
+
   it('accepts image items and injects image defaults', () => {
     const notebook = normalizeStoredNotebook({
       items: [

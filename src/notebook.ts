@@ -1,6 +1,18 @@
 import type { JSONContent } from '@tiptap/core'
 
-export type ItemType = 'text' | 'note' | 'rect' | 'ellipse' | 'diamond' | 'slide' | 'webEmbed' | 'path' | 'image'
+export type ItemType =
+  | 'text'
+  | 'note'
+  | 'rect'
+  | 'ellipse'
+  | 'diamond'
+  | 'slide'
+  | 'webEmbed'
+  | 'path'
+  | 'line'
+  | 'arrow'
+  | 'image'
+export type StrokeItemType = 'path' | 'line' | 'arrow'
 export type StrokeStyle = 'solid' | 'dashed' | 'dotted'
 export type StrokeWidth = 'thin' | 'medium' | 'bold'
 export type FontFamily = 'hand' | 'sans' | 'mono'
@@ -31,9 +43,21 @@ type BaseCanvasItem = {
   h: number
 } & ItemStyle
 
-export type PathCanvasItem = BaseCanvasItem & {
-  type: 'path'
+export type StrokeCanvasItem = BaseCanvasItem & {
+  type: StrokeItemType
   points: PathPoint[]
+}
+
+export type PathCanvasItem = StrokeCanvasItem & {
+  type: 'path'
+}
+
+export type LineCanvasItem = StrokeCanvasItem & {
+  type: 'line'
+}
+
+export type ArrowCanvasItem = StrokeCanvasItem & {
+  type: 'arrow'
 }
 
 export type ImageCanvasItem = BaseCanvasItem & {
@@ -52,14 +76,21 @@ export type WebEmbedCanvasItem = BaseCanvasItem & {
   url: string
 }
 
-type TextItemType = Exclude<ItemType, 'path' | 'image' | 'slide' | 'webEmbed'>
+type TextItemType = Exclude<ItemType, StrokeItemType | 'image' | 'slide' | 'webEmbed'>
 
 export type TextCanvasItem = BaseCanvasItem & {
   type: TextItemType
   content: JSONContent
 }
 
-export type CanvasItem = TextCanvasItem | PathCanvasItem | ImageCanvasItem | SlideCanvasItem | WebEmbedCanvasItem
+export type CanvasItem =
+  | TextCanvasItem
+  | PathCanvasItem
+  | LineCanvasItem
+  | ArrowCanvasItem
+  | ImageCanvasItem
+  | SlideCanvasItem
+  | WebEmbedCanvasItem
 
 export type Viewport = {
   x: number
@@ -107,7 +138,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isItemType = (value: unknown): value is ItemType =>
   typeof value === 'string' &&
-  ['text', 'note', 'rect', 'ellipse', 'diamond', 'slide', 'webEmbed', 'path', 'image'].includes(value)
+  ['text', 'note', 'rect', 'ellipse', 'diamond', 'slide', 'webEmbed', 'path', 'line', 'arrow', 'image'].includes(value)
 
 const isStrokeWidth = (value: unknown): value is StrokeWidth =>
   typeof value === 'string' && ['thin', 'medium', 'bold'].includes(value)
@@ -221,11 +252,15 @@ export const withDefaultItemStyle = <T extends { type: ItemType } & Partial<Item
 }
 
 export const isPathItem = (item: CanvasItem): item is PathCanvasItem => item.type === 'path'
+export const isLineItem = (item: CanvasItem): item is LineCanvasItem => item.type === 'line'
+export const isArrowItem = (item: CanvasItem): item is ArrowCanvasItem => item.type === 'arrow'
+export const isStrokeCanvasItem = (item: CanvasItem): item is StrokeCanvasItem =>
+  item.type === 'path' || item.type === 'line' || item.type === 'arrow'
 export const isImageItem = (item: CanvasItem): item is ImageCanvasItem => item.type === 'image'
 export const isSlideItem = (item: CanvasItem): item is SlideCanvasItem => item.type === 'slide'
 export const isWebEmbedItem = (item: CanvasItem): item is WebEmbedCanvasItem => item.type === 'webEmbed'
 export const isTextCanvasItem = (item: CanvasItem): item is TextCanvasItem =>
-  item.type !== 'path' && item.type !== 'image' && item.type !== 'slide' && item.type !== 'webEmbed'
+  !isStrokeCanvasItem(item) && item.type !== 'image' && item.type !== 'slide' && item.type !== 'webEmbed'
 
 export const sortCanvasItemsForRender = (items: CanvasItem[]) => {
   const slideItems: CanvasItem[] = []
@@ -451,12 +486,14 @@ export const normalizeStoredItem = (value: unknown): CanvasItem | null => {
 
   const styled = withDefaultItemStyle(value as { type: ItemType } & Partial<ItemStyle>)
 
-  if (value.type === 'path') {
-    if (!Array.isArray(value.points) || !value.points.every(isPathPoint) || value.points.length < 1) return null
+  if (value.type === 'path' || value.type === 'line' || value.type === 'arrow') {
+    if (!Array.isArray(value.points) || !value.points.every(isPathPoint)) return null
+    if (value.type === 'path' && value.points.length < 1) return null
+    if ((value.type === 'line' || value.type === 'arrow') && value.points.length < 2) return null
 
     return {
       id: value.id,
-      type: 'path',
+      type: value.type,
       x: value.x,
       y: value.y,
       w: value.w,

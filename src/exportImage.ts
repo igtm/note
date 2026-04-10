@@ -1,15 +1,15 @@
 import type { JSONContent } from '@tiptap/core'
 import { getUrlDisplayLabel } from './links'
 import {
+  isStrokeCanvasItem,
   isImageItem,
-  isPathItem,
   isSlideItem,
   isWebEmbedItem,
   sortCanvasItemsForRender,
   type CanvasItem,
   type FontFamily,
   type FontSize,
-  type PathCanvasItem,
+  type StrokeCanvasItem,
   type StrokeStyle,
   type StrokeWidth,
 } from './notebook'
@@ -206,12 +206,37 @@ const renderBlock = (node: JSONContent): string => {
 
 const renderRichText = (content: JSONContent) => (content.content ?? []).map(renderBlock).join('')
 
-const isDotPath = (item: PathCanvasItem) => {
+const isDotPath = (item: StrokeCanvasItem) => {
+  if (item.type !== 'path') return false
   const first = item.points[0]
   return item.points.every((point) => Math.abs(point.x - first.x) < 0.4 && Math.abs(point.y - first.y) < 0.4)
 }
 
-const renderPath = (item: PathCanvasItem, themeName: ExportThemeName) => {
+const getArrowHeadPoints = (item: StrokeCanvasItem, size: number) => {
+  const tip = item.points[item.points.length - 1]
+  const tail = item.points[item.points.length - 2] ?? { x: tip.x - 1, y: tip.y }
+  const dx = tip.x - tail.x
+  const dy = tip.y - tail.y
+  const length = Math.max(Math.hypot(dx, dy), 0.001)
+  const unit = { x: dx / length, y: dy / length }
+  const normal = { x: -unit.y, y: unit.x }
+  const base = {
+    x: tip.x - unit.x * size,
+    y: tip.y - unit.y * size,
+  }
+  const spread = size * 0.56
+  const left = {
+    x: base.x + normal.x * spread,
+    y: base.y + normal.y * spread,
+  }
+  const right = {
+    x: base.x - normal.x * spread,
+    y: base.y - normal.y * spread,
+  }
+  return `${formatNumber(left.x)},${formatNumber(left.y)} ${formatNumber(tip.x)},${formatNumber(tip.y)} ${formatNumber(right.x)},${formatNumber(right.y)}`
+}
+
+const renderPath = (item: StrokeCanvasItem, themeName: ExportThemeName) => {
   const stroke = resolvePathStroke(item.stroke, themeName)
   if (isDotPath(item)) {
     const center = item.points[0]
@@ -219,11 +244,15 @@ const renderPath = (item: PathCanvasItem, themeName: ExportThemeName) => {
   }
 
   const points = item.points.map((point) => `${formatNumber(point.x)},${formatNumber(point.y)}`).join(' ')
-  return `<svg class="path-item" width="${formatNumber(item.w)}" height="${formatNumber(item.h)}" viewBox="0 0 ${formatNumber(item.w)} ${formatNumber(item.h)}" aria-hidden="true"><polyline points="${escapeXml(points)}" /></svg>`
+  const arrowHead =
+    item.type === 'arrow'
+      ? `<polygon points="${escapeXml(getArrowHeadPoints(item, Math.max(strokeWidthPx(item.strokeWidth) * 4.2, 12)))}" fill="${escapeXml(stroke)}" stroke="none" />`
+      : ''
+  return `<svg class="path-item" width="${formatNumber(item.w)}" height="${formatNumber(item.h)}" viewBox="0 0 ${formatNumber(item.w)} ${formatNumber(item.h)}" aria-hidden="true"><polyline points="${escapeXml(points)}" />${arrowHead}</svg>`
 }
 
 const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, themeName: ExportThemeName, theme: ExportTheme) => {
-  const resolvedStroke = isPathItem(item) ? resolvePathStroke(item.stroke, themeName) : item.stroke
+  const resolvedStroke = isStrokeCanvasItem(item) ? resolvePathStroke(item.stroke, themeName) : item.stroke
   const style = [
     `left:${formatNumber(item.x - bounds.x + padding)}px`,
     `top:${formatNumber(item.y - bounds.y + padding)}px`,
@@ -239,8 +268,8 @@ const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, the
     `--item-text-align:${item.textAlign}`,
   ].join(';')
 
-  if (isPathItem(item)) {
-    return `<div class="canvas-item item-path" style="${style}">${renderPath(item, themeName)}</div>`
+  if (isStrokeCanvasItem(item)) {
+    return `<div class="canvas-item item-${item.type}" style="${style}">${renderPath(item, themeName)}</div>`
   }
 
   if (isImageItem(item)) {
@@ -512,7 +541,8 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     overflow: visible;
     fill: none;
   }
-  .export-root .path-item polyline {
+  .export-root .path-item polyline,
+  .export-root .path-item path {
     fill: none;
     stroke: var(--item-stroke);
     stroke-width: var(--item-stroke-width);

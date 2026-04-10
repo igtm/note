@@ -51,6 +51,8 @@
 }
 
 .canvas-stage.tool-pencil,
+.canvas-stage.tool-line,
+.canvas-stage.tool-arrow,
 .canvas-stage.tool-eraser,
 .canvas-stage.tool-rect,
 .canvas-stage.tool-ellipse,
@@ -58,6 +60,8 @@
 .canvas-stage.tool-slide,
 .canvas-stage.tool-webEmbed,
 .canvas-stage.tool-pencil .canvas-item,
+.canvas-stage.tool-line .canvas-item,
+.canvas-stage.tool-arrow .canvas-item,
 .canvas-stage.tool-eraser .canvas-item,
 .canvas-stage.tool-rect .canvas-item,
 .canvas-stage.tool-ellipse .canvas-item,
@@ -1337,6 +1341,24 @@
   text-overflow: ellipsis;
 }
 
+.web-embed-url-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(91, 72, 38, 0.16);
+  border-radius: 999px;
+  color: rgba(53, 38, 18, 0.9);
+  background: rgba(255, 255, 255, 0.92);
+  font: inherit;
+  font-size: 12px;
+}
+
+.web-embed-url-input:focus-visible {
+  outline: 2px solid rgba(87, 115, 196, 0.38);
+  outline-offset: 1px;
+}
+
 .web-embed-open-button {
   min-height: 30px;
   padding: 0 12px;
@@ -1473,7 +1495,8 @@
   pointer-events: none;
 }
 
-.path-item polyline {
+.path-item polyline,
+.path-item path {
   fill: none;
   stroke: var(--item-stroke);
   stroke-width: var(--item-stroke-width);

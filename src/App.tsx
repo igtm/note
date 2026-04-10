@@ -20,6 +20,7 @@ import { RichTextItem } from './RichTextItem'
 import {
   createDefaultItemStyle,
   createEmptyContent,
+  isStrokeCanvasItem,
   isImageItem,
   isPathItem,
   isSlideItem,
@@ -27,14 +28,18 @@ import {
   isWebEmbedItem,
   normalizeStoredNotebook,
   sortCanvasItemsForRender,
+  type ArrowCanvasItem,
   type CanvasItem,
   type FontFamily,
   type FontSize,
   type ItemStyle,
   type ItemType,
+  type LineCanvasItem,
   type PathCanvasItem,
   type SavedNotebook,
   type SlideCanvasItem,
+  type StrokeCanvasItem,
+  type StrokeItemType,
   type StrokeStyle,
   type StrokeWidth,
   type TextAlign,
@@ -62,7 +67,7 @@ import {
 import { collectPresentationSlides, fitSlideToViewport } from './slideshow'
 import { NOTE_TEMPLATE_SECTIONS, type NotebookTemplate } from './templates'
 
-type ShapeTool = 'rect' | 'ellipse' | 'diamond' | 'slide' | 'webEmbed'
+type ShapeTool = 'rect' | 'ellipse' | 'diamond' | 'slide' | 'webEmbed' | 'line' | 'arrow'
 type Tool = 'selection' | 'pan' | 'pencil' | 'eraser' | 'text' | ShapeTool
 
 type NoteFileHandle = {
@@ -166,6 +171,8 @@ const TOOLS: { id: Tool; label: string; shortcut: string }[] = [
   { id: 'selection', label: 'Selection', shortcut: 'V' },
   { id: 'pan', label: 'Pan', shortcut: 'H' },
   { id: 'pencil', label: 'Pencil', shortcut: 'P' },
+  { id: 'line', label: 'Line', shortcut: 'I' },
+  { id: 'arrow', label: 'Arrow', shortcut: 'A' },
   { id: 'eraser', label: 'Eraser', shortcut: 'E' },
   { id: 'text', label: 'Text', shortcut: 'T' },
   { id: 'webEmbed', label: 'Web', shortcut: 'W' },
@@ -223,7 +230,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 const unique = (values: string[]) => [...new Set(values)]
 
 const isShapeTool = (value: Tool): value is ShapeTool =>
-  ['rect', 'ellipse', 'diamond', 'slide', 'webEmbed'].includes(value)
+  ['rect', 'ellipse', 'diamond', 'slide', 'webEmbed', 'line', 'arrow'].includes(value)
 
 const strokeWidthPx = (value: StrokeWidth) =>
   ({
@@ -257,6 +264,8 @@ const LIGHT_INK_STROKE = '#1f1f1f'
 const THEME_INK_STROKE = 'var(--ink-stroke)'
 
 const resolvePathStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
+const isLinearTool = (value: ShapeTool): value is LineCanvasItem['type'] | ArrowCanvasItem['type'] =>
+  value === 'line' || value === 'arrow'
 
 const verticalPadding = (element: HTMLElement) => {
   const style = getComputedStyle(element)
@@ -342,7 +351,12 @@ const segmentHitsBox = (start: Point, end: Point, box: SelectionBox, padding: nu
   )
 }
 
-const createPathItemFromPoints = (id: string, points: Point[], style: ItemStyle): PathCanvasItem => {
+const createStrokeItemFromPoints = (
+  id: string,
+  type: StrokeItemType,
+  points: Point[],
+  style: ItemStyle,
+): StrokeCanvasItem => {
   const safePoints = points.length ? points : [{ x: 0, y: 0 }]
   const minX = Math.min(...safePoints.map((point) => point.x))
   const minY = Math.min(...safePoints.map((point) => point.y))
@@ -354,7 +368,7 @@ const createPathItemFromPoints = (id: string, points: Point[], style: ItemStyle)
 
   return {
     id,
-    type: 'path',
+    type,
     x: minX - padding,
     y: minY - padding,
     w: width,
@@ -366,6 +380,17 @@ const createPathItemFromPoints = (id: string, points: Point[], style: ItemStyle)
     ...style,
   }
 }
+
+const createPathItemFromPoints = (id: string, points: Point[], style: ItemStyle): PathCanvasItem =>
+  createStrokeItemFromPoints(id, 'path', points, style) as PathCanvasItem
+
+const createLinearItemFromEndpoints = (
+  id: string,
+  type: LineCanvasItem['type'] | ArrowCanvasItem['type'],
+  start: Point,
+  end: Point,
+  style: ItemStyle,
+): StrokeCanvasItem => createStrokeItemFromPoints(id, type, [start, end], style)
 
 const shapeBoxFromDrag = (type: ShapeTool, start: Point, end: Point): SelectionBox => {
   if (type !== 'ellipse') return normalizeBox(start, end)
@@ -442,7 +467,8 @@ const loadNotebook = (): SavedNotebook => {
 const isEditableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === 'INPUT' || target.isContentEditable)
 
-const isFillableItem = (item: CanvasItem) => !isPathItem(item) && !isImageItem(item) && !isWebEmbedItem(item)
+const isFillableItem = (item: CanvasItem) =>
+  !isStrokeCanvasItem(item) && !isImageItem(item) && !isWebEmbedItem(item)
 
 const typeLabel = (type: ItemType) =>
   ({
@@ -453,6 +479,8 @@ const typeLabel = (type: ItemType) =>
     diamond: 'Diamond',
     slide: 'Slide frame',
     webEmbed: 'Web embed',
+    line: 'Line',
+    arrow: 'Arrow',
     path: 'Stroke',
     image: 'Image',
   })[type]
@@ -482,6 +510,23 @@ const ToolIcon = (props: { tool: Tool }) => {
       <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="m5 19 1.2-4.6L15 5.6l3.4 3.4-8.9 8.8Z" />
         <path d="m13.8 6.8 3.4 3.4" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'line') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 18 19 6" />
+      </svg>
+    )
+  }
+
+  if (props.tool === 'arrow') {
+    return (
+      <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 18 19 6" />
+        <path d="m13.8 6 5.2 0v5.2" />
       </svg>
     )
   }
@@ -549,8 +594,33 @@ const ToolIcon = (props: { tool: Tool }) => {
   )
 }
 
-const PathStroke = (props: { item: PathCanvasItem }) => {
+const arrowHeadPoints = (points: Point[], size: number) => {
+  const tip = points[points.length - 1]
+  const tail = points[points.length - 2] ?? { x: tip.x - 1, y: tip.y }
+  const dx = tip.x - tail.x
+  const dy = tip.y - tail.y
+  const length = Math.max(Math.hypot(dx, dy), 0.001)
+  const unit = { x: dx / length, y: dy / length }
+  const normal = { x: -unit.y, y: unit.x }
+  const base = {
+    x: tip.x - unit.x * size,
+    y: tip.y - unit.y * size,
+  }
+  const spread = size * 0.56
+  const left = {
+    x: base.x + normal.x * spread,
+    y: base.y + normal.y * spread,
+  }
+  const right = {
+    x: base.x - normal.x * spread,
+    y: base.y - normal.y * spread,
+  }
+  return `${left.x},${left.y} ${tip.x},${tip.y} ${right.x},${right.y}`
+}
+
+const StrokeItem = (props: { item: StrokeCanvasItem }) => {
   const isDot = createMemo(() => {
+    if (props.item.type !== 'path') return false
     const first = props.item.points[0]
     return props.item.points.every((point) => distance(point, first) < 0.4)
   })
@@ -558,6 +628,9 @@ const PathStroke = (props: { item: PathCanvasItem }) => {
   const points = createMemo(() => props.item.points.map((point) => `${point.x},${point.y}`).join(' '))
   const center = createMemo(() => props.item.points[0])
   const stroke = createMemo(() => resolvePathStroke(props.item.stroke))
+  const arrowHead = createMemo(() =>
+    props.item.type === 'arrow' ? arrowHeadPoints(props.item.points, Math.max(strokeWidthPx(props.item.strokeWidth) * 4.2, 12)) : '',
+  )
 
   return (
     <svg
@@ -579,6 +652,9 @@ const PathStroke = (props: { item: PathCanvasItem }) => {
         }
       >
         <polyline points={points()} />
+        <Show when={props.item.type === 'arrow'}>
+          <polygon points={arrowHead()} fill={stroke()} stroke="none" />
+        </Show>
       </Show>
     </svg>
   )
@@ -691,7 +767,7 @@ function App() {
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   })
   const selectedTextItems = createMemo(() => selectedItems().filter(isTextCanvasItem))
-  const selectedPathItems = createMemo(() => selectedItems().filter(isPathItem))
+  const selectedStrokeItems = createMemo(() => selectedItems().filter(isStrokeCanvasItem))
   const erasePreviewIdSet = createMemo(() => new Set(erasePreviewIds()))
   const resolvedTheme = createMemo<ResolvedTheme>(() => resolveTheme(themeMode(), systemTheme()))
   const canSaveToCurrentFile = createMemo(() => currentNoteFileHandle() !== null)
@@ -713,30 +789,11 @@ function App() {
   const draftShape = createMemo(() => {
     const active = interaction()
     if (active?.kind !== 'createShape') return null
-
-    const box = shapeBoxFromDrag(active.type, active.startWorld, active.currentWorld)
-    if (!isShapeBoxVisible(box)) return null
-
-    const draft = {
-      id: 'shape-draft',
-      type: active.type,
-      x: box.x,
-      y: box.y,
-      w: box.w,
-      h: box.h,
-      ...createDefaultItemStyle(active.type),
-    } as CanvasItem
-
-    if (active.type === 'slide') return draft
-
-    return {
-      ...draft,
-      content: createEmptyContent(),
-    } as CanvasItem
+    return createDraftShapeItem(active.type, active.startWorld, active.currentWorld)
   })
   const canEditText = createMemo(() => selectedTextItems().length === selectedItems().length && selectedItems().length > 0)
   const canChangeFill = createMemo(() => selectedFillItems().length > 0)
-  const canResize = createMemo(() => selectedItem() && !isPathItem(selectedItem()!))
+  const canResize = createMemo(() => selectedItem() && !isStrokeCanvasItem(selectedItem()!))
   const inspectorStroke = createMemo(() => selectedItems()[0]?.stroke ?? '#1f1f1f')
   const inspectorFill = createMemo(() => selectedFillItems()[0]?.color ?? 'transparent')
   const inspectorStrokeWidth = createMemo<StrokeWidth>(() => selectedItems()[0]?.strokeWidth ?? 'medium')
@@ -1248,7 +1305,40 @@ function App() {
     ...createDefaultItemStyle('text'),
   })
 
+  const createDraftShapeItem = (type: ShapeTool, startWorld: Point, endWorld: Point): CanvasItem | null => {
+    if (isLinearTool(type)) {
+      if (distance(startWorld, endWorld) < 12) return null
+      return createLinearItemFromEndpoints('shape-draft', type, startWorld, endWorld, createDefaultItemStyle(type))
+    }
+
+    const box = shapeBoxFromDrag(type, startWorld, endWorld)
+    if (!isShapeBoxVisible(box)) return null
+
+    const item = {
+      id: 'shape-draft',
+      type,
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      ...createDefaultItemStyle(type),
+    } as CanvasItem
+
+    if (type === 'slide') return item
+    if (type === 'webEmbed') return { ...item, url: '' } as CanvasItem
+
+    return {
+      ...item,
+      content: createEmptyContent(),
+    } as CanvasItem
+  }
+
   const createShapeItem = (type: ShapeTool, startWorld: Point, endWorld: Point): CanvasItem | null => {
+    if (isLinearTool(type)) {
+      if (distance(startWorld, endWorld) < 12) return null
+      return createLinearItemFromEndpoints(createId(), type, startWorld, endWorld, createDefaultItemStyle(type))
+    }
+
     const box = shapeBoxFromDrag(type, startWorld, endWorld)
     if (!isShapeBoxVisible(box)) return null
 
@@ -1627,7 +1717,7 @@ function App() {
     item: CanvasItem,
   ) => {
     if (slideshowActive()) return
-    if (isPathItem(item)) return
+    if (isStrokeCanvasItem(item)) return
     event.stopPropagation()
     setSelectedIds([item.id])
     setInteraction({
@@ -1746,6 +1836,16 @@ function App() {
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY * 0.001)
       zoomAt(event.clientX, event.clientY, view().zoom * factor)
+      return
+    }
+
+    if (event.shiftKey) {
+      const horizontalDelta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+      setView((current) => ({
+        ...current,
+        x: current.x - horizontalDelta,
+      }))
       return
     }
 
@@ -1947,7 +2047,7 @@ function App() {
       `min-height: ${item.h}px`,
       `height: ${item.h}px`,
       `--item-fill: ${item.color}`,
-      `--item-stroke: ${isPathItem(item) ? resolvePathStroke(item.stroke) : item.stroke}`,
+      `--item-stroke: ${isStrokeCanvasItem(item) ? resolvePathStroke(item.stroke) : item.stroke}`,
       `--item-stroke-width: ${strokeWidthPx(item.strokeWidth)}px`,
       `--item-stroke-style: ${item.strokeStyle}`,
       `--item-stroke-dash: ${strokeDasharray(item.strokeStyle)}`,
@@ -2376,7 +2476,7 @@ function App() {
                 <p class="eyebrow">Tools</p>
                 <h1>Canvas styles</h1>
                 <p class="hint-copy">
-                  R / O / D / L: drag to create frames and shapes. P: pencil, E: eraser.
+                  I: line, A: arrow, R / O / D / L: drag to create shapes and slides. P: pencil, E: eraser.
                 </p>
               </>
             }
@@ -2537,8 +2637,8 @@ function App() {
             </Show>
 
               <p class="hint-copy">
-                {selectedPathItems().length
-                  ? 'Paths support stroke controls. Text options apply to text and shape items.'
+                {selectedStrokeItems().length
+                  ? 'Lines, arrows, and strokes support stroke controls. Text options apply to text and shape items.'
                   : 'Double click a text-capable item to edit. Slide frames stay as page boundaries.'}
               </p>
             </>
@@ -2649,9 +2749,9 @@ function App() {
                 const current = item()
                 return isSlideItem(current) ? current : null
               }
-              const pathItem = () => {
+              const strokeItem = () => {
                 const current = item()
-                return isPathItem(current) ? current : null
+                return isStrokeCanvasItem(current) ? current : null
               }
               const textItem = () => {
                 const current = item()
@@ -2668,7 +2768,7 @@ function App() {
                   style={style()}
                   onPointerDown={(event) => handleItemPointerDown(event, item())}
                   onDblClick={(event) => {
-                    if (isPathItem(item()) || isImageItem(item()) || isSlideItem(item()) || isWebEmbedItem(item())) return
+                    if (isStrokeCanvasItem(item()) || isImageItem(item()) || isSlideItem(item()) || isWebEmbedItem(item())) return
                     event.stopPropagation()
                     setSelectedIds([itemId])
                     setEditingId(itemId)
@@ -2679,7 +2779,7 @@ function App() {
                   </Show>
 
                   <Show
-                    when={pathItem()}
+                    when={strokeItem()}
                     fallback={
                       <Show
                         when={imageItem()}
@@ -2732,7 +2832,24 @@ function App() {
                                 <div class="item-content">
                                   <div class="web-embed-shell">
                                     <div class="web-embed-toolbar">
-                                      <span class="web-embed-label">{href() ? getUrlDisplayLabel(webEmbedItem().url) : 'Web embed'}</span>
+                                      <Show
+                                        when={isSelected()}
+                                        fallback={
+                                          <span class="web-embed-label">
+                                            {href() ? getUrlDisplayLabel(webEmbedItem().url) : 'Web embed'}
+                                          </span>
+                                        }
+                                      >
+                                        <input
+                                          class="web-embed-url-input"
+                                          type="url"
+                                          value={webEmbedItem().url}
+                                          placeholder="Paste a URL…"
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onInput={(event) => updateWebEmbedUrl(webEmbedItem().id, event.currentTarget.value)}
+                                        />
+                                      </Show>
                                       <button
                                         class="web-embed-open-button"
                                         type="button"
@@ -2752,7 +2869,11 @@ function App() {
                                       fallback={
                                         <div class="web-embed-placeholder">
                                           <strong>Paste a URL</strong>
-                                          <span>Set a website in the inspector to turn this frame into a live embed.</span>
+                                          <span>
+                                            {isSelected()
+                                              ? 'Paste a website into the field above to turn this frame into a live embed.'
+                                              : 'Select this frame to paste a website URL.'}
+                                          </span>
                                         </div>
                                       }
                                     >
@@ -2786,8 +2907,8 @@ function App() {
                         )}
                       </Show>
                     }
-                  >
-                    {(pathItem) => <PathStroke item={pathItem()} />}
+                      >
+                    {(strokeItem) => <StrokeItem item={strokeItem()} />}
                   </Show>
 
                   <Show
@@ -2807,14 +2928,17 @@ function App() {
             }}
           </For>
           <Show when={draftShape()}>
-            {(item) => (
-              <div class={`canvas-item item-${item().type} is-draft`} style={itemStyle(item())}>
-                <Show when={item().type === 'diamond'}>
+            {(item) => {
+              const draft = item()
+              return (
+              <div class={`canvas-item item-${draft.type} is-draft`} style={itemStyle(draft)}>
+                <Show when={draft.type === 'diamond'}>
                   <div class="diamond-fill" />
                 </Show>
-                <div class="item-content" />
+                {isStrokeCanvasItem(draft) ? <StrokeItem item={draft} /> : <div class="item-content" />}
               </div>
-            )}
+              )
+            }}
           </Show>
           <Show when={selectedBounds()}>
             {(box) => (
