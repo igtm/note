@@ -15,6 +15,12 @@ import {
   getItemBounds,
   injectPngTextChunk,
 } from './exportImage'
+import {
+  EXPORT_PREVIEW_DEBOUNCE_MS,
+  createPreviewRenderFingerprint,
+  getRasterRenderSettings,
+  type RasterRenderMode,
+} from './exportRaster'
 import { RichTextItem } from './RichTextItem'
 import { WebEmbedContent } from './WebEmbedContent'
 import {
@@ -697,10 +703,108 @@ function App() {
   let imagePickerRef!: HTMLInputElement
   let notePickerRef!: HTMLInputElement
   let exportPreviewObjectUrl: string | undefined
+  let exportPreviewFingerprint: string | undefined
   let exportPreviewRequestId = 0
+  let exportPreviewTimer: number | undefined
+  let exportRenderCaptureRef: HTMLDivElement | undefined
+  let exportRenderSurfaceRef: HTMLDivElement | undefined
+  let exportRenderSurfaceHtml = ''
+  let exportRenderSurfaceWidth = 0
+  let exportRenderSurfaceHeight = 0
+  let exportRenderQueue = Promise.resolve()
+  let documentFontsReadyPromise: Promise<void> | null = null
   let inMemoryClipboard: CanvasItem[] | null = null
   let clipboardPasteCount = 0
   const itemContentRefs = new Map<string, HTMLDivElement>()
+
+  const queueExportRender = async <T,>(job: () => Promise<T>) => {
+    const previous = exportRenderQueue
+    let release: (() => void) | undefined
+    exportRenderQueue = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await job()
+    } finally {
+      release?.()
+    }
+  }
+
+  const ensureExportRenderSurface = () => {
+    if (exportRenderCaptureRef && exportRenderSurfaceRef && exportRenderCaptureRef.isConnected) {
+      return exportRenderSurfaceRef
+    }
+
+    const captureRoot = document.createElement('div')
+    captureRoot.className = 'export-render-capture'
+    captureRoot.setAttribute('aria-hidden', 'true')
+
+    const surface = document.createElement('div')
+    surface.className = 'export-render-surface'
+    captureRoot.append(surface)
+    document.body.append(captureRoot)
+
+    exportRenderCaptureRef = captureRoot
+    exportRenderSurfaceRef = surface
+    exportRenderSurfaceHtml = ''
+    exportRenderSurfaceWidth = 0
+    exportRenderSurfaceHeight = 0
+
+    return surface
+  }
+
+  const updateExportRenderSurface = (scene: NonNullable<ReturnType<typeof buildSceneForExport>>) => {
+    const surface = ensureExportRenderSurface()
+
+    if (exportRenderSurfaceWidth !== scene.width) {
+      surface.style.width = `${scene.width}px`
+      exportRenderSurfaceWidth = scene.width
+    }
+    if (exportRenderSurfaceHeight !== scene.height) {
+      surface.style.height = `${scene.height}px`
+      exportRenderSurfaceHeight = scene.height
+    }
+    if (exportRenderSurfaceHtml !== scene.html) {
+      surface.innerHTML = scene.html
+      exportRenderSurfaceHtml = scene.html
+    }
+
+    return surface
+  }
+
+  const waitForExportRenderImages = async (surface: HTMLDivElement) => {
+    const images = [...surface.querySelectorAll('img')]
+    await Promise.all(
+      images.map(async (image) => {
+        if (typeof image.decode === 'function') {
+          try {
+            await image.decode()
+            return
+          } catch {
+            // Fall back to load/error events when decode is unavailable for the current image state.
+          }
+        }
+        if (image.complete) return
+
+        await new Promise<void>((resolve) => {
+          const finish = () => resolve()
+          image.addEventListener('load', finish, { once: true })
+          image.addEventListener('error', finish, { once: true })
+        })
+      }),
+    )
+  }
+
+  const waitForExportRenderSurface = async (surface: HTMLDivElement) => {
+    await Promise.resolve()
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    if ('fonts' in document) {
+      documentFontsReadyPromise ??= document.fonts.ready.then(() => undefined, () => undefined)
+      await documentFontsReadyPromise
+    }
+    await waitForExportRenderImages(surface)
+  }
 
   const viewportCenterWorld = (): Point => ({
     x: (stageRef.clientWidth / 2 - view().x) / view().zoom,
@@ -852,10 +956,6 @@ function App() {
     const requestId = ++exportPreviewRequestId
 
     if (!exportModalOpen()) {
-      if (exportPreviewObjectUrl) {
-        URL.revokeObjectURL(exportPreviewObjectUrl)
-        exportPreviewObjectUrl = undefined
-      }
       setExportPreviewPending(false)
       setExportPreviewUrl(null)
       return
@@ -868,24 +968,41 @@ function App() {
       return
     }
 
+    const fingerprint = createPreviewRenderFingerprint(scene)
+    if (exportPreviewFingerprint === fingerprint && exportPreviewObjectUrl) {
+      setExportPreviewPending(false)
+      setExportPreviewUrl(exportPreviewObjectUrl)
+      return
+    }
+
     setExportPreviewPending(true)
-    void renderSceneToPngBlob(scene)
-      .then((blob) => {
-        if (requestId !== exportPreviewRequestId || !exportModalOpen()) return
-        const url = URL.createObjectURL(blob)
-        if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
-        exportPreviewObjectUrl = url
-        setExportPreviewUrl(url)
-      })
-      .catch((error) => {
-        if (requestId !== exportPreviewRequestId) return
-        console.error(error)
-        setExportPreviewUrl(null)
-      })
-      .finally(() => {
-        if (requestId !== exportPreviewRequestId) return
-        setExportPreviewPending(false)
-      })
+    const timer = window.setTimeout(() => {
+      exportPreviewTimer = undefined
+      void renderSceneToPngBlob(scene, null, 'preview')
+        .then((blob) => {
+          if (requestId !== exportPreviewRequestId || !exportModalOpen()) return
+          const url = URL.createObjectURL(blob)
+          if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
+          exportPreviewObjectUrl = url
+          exportPreviewFingerprint = fingerprint
+          setExportPreviewUrl(url)
+        })
+        .catch((error) => {
+          if (requestId !== exportPreviewRequestId) return
+          console.error(error)
+          setExportPreviewUrl(null)
+        })
+        .finally(() => {
+          if (requestId !== exportPreviewRequestId) return
+          setExportPreviewPending(false)
+        })
+    }, EXPORT_PREVIEW_DEBOUNCE_MS)
+    exportPreviewTimer = timer
+
+    onCleanup(() => {
+      window.clearTimeout(timer)
+      if (exportPreviewTimer === timer) exportPreviewTimer = undefined
+    })
   })
 
   createEffect(() => {
@@ -1237,34 +1354,20 @@ function App() {
   const renderSceneToPngBlob = async (
     scene: NonNullable<ReturnType<typeof buildSceneForExport>>,
     payload?: string | null,
-  ) => {
-    const captureRoot = document.createElement('div')
-    captureRoot.className = 'export-render-capture'
-    captureRoot.setAttribute('aria-hidden', 'true')
+    mode: RasterRenderMode = 'export',
+  ) =>
+    queueExportRender(async () => {
+      const surface = updateExportRenderSurface(scene)
+      await waitForExportRenderSurface(surface)
 
-    const surface = document.createElement('div')
-    surface.className = 'export-render-surface'
-    surface.style.width = `${scene.width}px`
-    surface.style.height = `${scene.height}px`
-    surface.innerHTML = scene.html
-    captureRoot.append(surface)
-    document.body.append(captureRoot)
-
-    try {
-      await Promise.resolve()
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-      if ('fonts' in document) {
-        await document.fonts.ready.catch(() => undefined)
-      }
-
-      const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+      const settings = getRasterRenderSettings(scene, mode, window.devicePixelRatio || 1)
       const blob = await toBlob(surface, {
-        width: scene.width,
-        height: scene.height,
-        canvasWidth: Math.ceil(scene.width * scale),
-        canvasHeight: Math.ceil(scene.height * scale),
-        pixelRatio: 1,
-        cacheBust: true,
+        width: settings.width,
+        height: settings.height,
+        canvasWidth: settings.canvasWidth,
+        canvasHeight: settings.canvasHeight,
+        pixelRatio: settings.pixelRatio,
+        cacheBust: settings.cacheBust,
         preferredFontFormat: 'woff2',
       })
       if (!blob) throw new Error('Failed to encode PNG export')
@@ -1273,10 +1376,7 @@ function App() {
       const arrayBuffer = await blob.arrayBuffer()
       const embedded = injectPngTextChunk(arrayBuffer, EXPORT_PNG_TEXT_KEY, payload)
       return new Blob([embedded], { type: 'image/png' })
-    } finally {
-      captureRoot.remove()
-    }
-  }
+    })
 
   const runExportAction = async (
     kind: 'png' | 'svg' | 'clipboard',
@@ -2148,7 +2248,9 @@ function App() {
   })
 
   onCleanup(() => {
+    if (exportPreviewTimer) window.clearTimeout(exportPreviewTimer)
     if (exportPreviewObjectUrl) URL.revokeObjectURL(exportPreviewObjectUrl)
+    exportRenderCaptureRef?.remove()
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('keydown', handleKeyDown)
