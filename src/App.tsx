@@ -266,6 +266,8 @@ const THEME_INK_STROKE = 'var(--ink-stroke)'
 const resolvePathStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
 const isLinearTool = (value: ShapeTool): value is LineCanvasItem['type'] | ArrowCanvasItem['type'] =>
   value === 'line' || value === 'arrow'
+const MIN_LINEAR_PREVIEW_LENGTH = 1
+const MIN_LINEAR_ITEM_LENGTH = 4
 
 const verticalPadding = (element: HTMLElement) => {
   const style = getComputedStyle(element)
@@ -1307,7 +1309,7 @@ function App() {
 
   const createDraftShapeItem = (type: ShapeTool, startWorld: Point, endWorld: Point): CanvasItem | null => {
     if (isLinearTool(type)) {
-      if (distance(startWorld, endWorld) < 12) return null
+      if (distance(startWorld, endWorld) < MIN_LINEAR_PREVIEW_LENGTH) return null
       return createLinearItemFromEndpoints('shape-draft', type, startWorld, endWorld, createDefaultItemStyle(type))
     }
 
@@ -1335,7 +1337,7 @@ function App() {
 
   const createShapeItem = (type: ShapeTool, startWorld: Point, endWorld: Point): CanvasItem | null => {
     if (isLinearTool(type)) {
-      if (distance(startWorld, endWorld) < 12) return null
+      if (distance(startWorld, endWorld) < MIN_LINEAR_ITEM_LENGTH) return null
       return createLinearItemFromEndpoints(createId(), type, startWorld, endWorld, createDefaultItemStyle(type))
     }
 
