@@ -785,7 +785,7 @@
 
 .inspector {
   left: 18px;
-  top: 18px;
+  top: 74px;
   width: min(320px, calc(100vw - 36px));
   max-height: calc(100vh - 120px);
   overflow: auto;
