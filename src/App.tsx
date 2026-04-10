@@ -696,7 +696,6 @@ function App() {
   let stageRef!: HTMLDivElement
   let imagePickerRef!: HTMLInputElement
   let notePickerRef!: HTMLInputElement
-  let exportRenderRef!: HTMLDivElement
   let exportPreviewObjectUrl: string | undefined
   let exportPreviewRequestId = 0
   let inMemoryClipboard: CanvasItem[] | null = null
@@ -1147,7 +1146,7 @@ function App() {
 
     closeExportModal()
     setAppMenuOpen(false)
-    applyLoadedNotebook({ items: embeddedItems, view: defaultView() }, null, file.name)
+    applyLoadedNotebook({ items: embeddedItems, view: defaultView() }, handle, file.name)
     setSaveState(`opened ${file.name}`)
     return true
   }
@@ -1201,8 +1200,32 @@ function App() {
         return
       }
 
+      const lowerName = (currentNoteFileName() ?? handle.name).toLowerCase()
       const writable = await handle.createWritable()
-      await writable.write(serializeNoteFile(currentNotebook()))
+      if (lowerName.endsWith('.png') || lowerName.endsWith('.svg')) {
+        const exportItems = items()
+        const payload = exportItems.length ? encodeEmbeddedExportPayload(exportItems) : null
+        const scene = buildExportSvg({
+          items: exportItems,
+          onlySelected: false,
+          includeBackground: true,
+          darkMode: resolvedTheme() === 'dark',
+          embedPayload: lowerName.endsWith('.svg') ? payload : null,
+        })
+        if (!scene || !payload) {
+          alert('保存する内容がありません。')
+          await writable.close()
+          return
+        }
+
+        if (lowerName.endsWith('.png')) {
+          await writable.write(await renderSceneToPngBlob(scene, payload))
+        } else {
+          await writable.write(new Blob([scene.svg], { type: 'image/svg+xml;charset=utf-8' }))
+        }
+      } else {
+        await writable.write(serializeNoteFile(currentNotebook()))
+      }
       await writable.close()
       setSaveState(`saved ${currentNoteFileName() ?? handle.name}`)
     } catch (error) {
@@ -1215,30 +1238,44 @@ function App() {
     scene: NonNullable<ReturnType<typeof buildSceneForExport>>,
     payload?: string | null,
   ) => {
-    if (!exportRenderRef) throw new Error('Export render surface is unavailable')
+    const captureRoot = document.createElement('div')
+    captureRoot.className = 'export-render-capture'
+    captureRoot.setAttribute('aria-hidden', 'true')
 
-    await Promise.resolve()
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    if ('fonts' in document) {
-      await document.fonts.ready.catch(() => undefined)
+    const surface = document.createElement('div')
+    surface.className = 'export-render-surface'
+    surface.style.width = `${scene.width}px`
+    surface.style.height = `${scene.height}px`
+    surface.innerHTML = scene.html
+    captureRoot.append(surface)
+    document.body.append(captureRoot)
+
+    try {
+      await Promise.resolve()
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      if ('fonts' in document) {
+        await document.fonts.ready.catch(() => undefined)
+      }
+
+      const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+      const blob = await toBlob(surface, {
+        width: scene.width,
+        height: scene.height,
+        canvasWidth: Math.ceil(scene.width * scale),
+        canvasHeight: Math.ceil(scene.height * scale),
+        pixelRatio: 1,
+        cacheBust: true,
+        preferredFontFormat: 'woff2',
+      })
+      if (!blob) throw new Error('Failed to encode PNG export')
+      if (!payload) return blob
+
+      const arrayBuffer = await blob.arrayBuffer()
+      const embedded = injectPngTextChunk(arrayBuffer, EXPORT_PNG_TEXT_KEY, payload)
+      return new Blob([embedded], { type: 'image/png' })
+    } finally {
+      captureRoot.remove()
     }
-
-    const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
-    const blob = await toBlob(exportRenderRef, {
-      width: scene.width,
-      height: scene.height,
-      canvasWidth: Math.ceil(scene.width * scale),
-      canvasHeight: Math.ceil(scene.height * scale),
-      pixelRatio: 1,
-      cacheBust: true,
-      preferredFontFormat: 'woff2',
-    })
-    if (!blob) throw new Error('Failed to encode PNG export')
-    if (!payload) return blob
-
-    const arrayBuffer = await blob.arrayBuffer()
-    const embedded = injectPngTextChunk(arrayBuffer, EXPORT_PNG_TEXT_KEY, payload)
-    return new Blob([embedded], { type: 'image/png' })
   }
 
   const runExportAction = async (
@@ -2474,18 +2511,6 @@ function App() {
             </div>
           </section>
 
-          <Show when={exportScene()}>
-            {(scene) => (
-              <div class="export-render-capture" aria-hidden="true">
-                <div
-                  ref={exportRenderRef}
-                  class="export-render-surface"
-                  style={{ width: `${scene().width}px`, height: `${scene().height}px` }}
-                  innerHTML={scene().html}
-                />
-              </div>
-            )}
-          </Show>
         </div>
       </Show>
 
