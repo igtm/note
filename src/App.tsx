@@ -15,8 +15,8 @@ import {
   getItemBounds,
   injectPngTextChunk,
 } from './exportImage'
-import { getUrlDisplayLabel, normalizeUrlHref } from './links'
 import { RichTextItem } from './RichTextItem'
+import { WebEmbedContent } from './WebEmbedContent'
 import {
   createDefaultItemStyle,
   createEmptyContent,
@@ -46,6 +46,7 @@ import {
   type Viewport,
   type WebEmbedCanvasItem,
 } from './notebook'
+import { resolveWebEmbed } from './webEmbeds'
 import {
   THEME_OPTIONS,
   THEME_STORAGE_KEY,
@@ -1049,12 +1050,12 @@ function App() {
   }
 
   const openWebEmbedUrl = (url: string) => {
-    const href = normalizeUrlHref(url, { allowBareDomain: true })
-    if (!href) return
-    window.open(href, '_blank', 'noopener,noreferrer')
+    const spec = resolveWebEmbed(url)
+    if (!spec) return
+    window.open(spec.openUrl, '_blank', 'noopener,noreferrer')
   }
 
-  const renderableWebEmbedUrl = (url: string) => normalizeUrlHref(url, { allowBareDomain: true })
+  const webEmbedSpec = (url: string) => resolveWebEmbed(url)
 
   const createExportPayload = () => {
     const exportItems = exportTargetItems()
@@ -2625,7 +2626,7 @@ function App() {
                     <button
                       type="button"
                       class="style-chip"
-                      disabled={!renderableWebEmbedUrl(item().url)}
+                      disabled={!webEmbedSpec(item().url)}
                       onClick={() => openWebEmbedUrl(item().url)}
                     >
                       Open site
@@ -2829,7 +2830,7 @@ function App() {
                             }
                           >
                             {(webEmbedItem) => {
-                              const href = () => renderableWebEmbedUrl(webEmbedItem().url)
+                              const spec = () => webEmbedSpec(webEmbedItem().url)
                               return (
                                 <div class="item-content">
                                   <div class="web-embed-shell">
@@ -2838,7 +2839,7 @@ function App() {
                                         when={isSelected()}
                                         fallback={
                                           <span class="web-embed-label">
-                                            {href() ? getUrlDisplayLabel(webEmbedItem().url) : 'Web embed'}
+                                            {spec() ? spec()!.providerLabel : 'Web embed'}
                                           </span>
                                         }
                                       >
@@ -2855,11 +2856,11 @@ function App() {
                                       <button
                                         class="web-embed-open-button"
                                         type="button"
-                                        disabled={!href()}
+                                        disabled={!spec()}
                                         onPointerDown={(event) => event.stopPropagation()}
                                         onClick={(event) => {
                                           event.stopPropagation()
-                                          if (!href()) return
+                                          if (!spec()) return
                                           openWebEmbedUrl(webEmbedItem().url)
                                         }}
                                       >
@@ -2867,26 +2868,22 @@ function App() {
                                       </button>
                                     </div>
                                     <Show
-                                      when={href()}
+                                      when={spec()}
                                       fallback={
                                         <div class="web-embed-placeholder">
                                           <strong>Paste a URL</strong>
                                           <span>
                                             {isSelected()
-                                              ? 'Paste a website into the field above to turn this frame into a live embed.'
+                                              ? 'Paste a website or supported social URL into the field above to turn this frame into a live embed.'
                                               : 'Select this frame to paste a website URL.'}
                                           </span>
                                         </div>
                                       }
                                     >
-                                      {(href) => (
-                                        <iframe
-                                          class="web-embed-frame"
-                                          src={href()}
-                                          title={getUrlDisplayLabel(webEmbedItem().url) || 'Embedded website'}
-                                          loading="lazy"
-                                          referrerPolicy="strict-origin-when-cross-origin"
-                                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+                                      {(spec) => (
+                                        <WebEmbedContent
+                                          spec={spec()}
+                                          darkMode={resolvedTheme() === 'dark'}
                                         />
                                       )}
                                     </Show>

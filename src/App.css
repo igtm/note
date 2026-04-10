@@ -1384,6 +1384,29 @@
   background: rgba(255, 255, 255, 0.72);
 }
 
+.web-embed-frame-youtube {
+  background: #090909;
+}
+
+.web-embed-social {
+  height: 100%;
+  overflow: auto;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(247, 241, 229, 0.9)),
+    var(--item-fill);
+}
+
+.web-embed-social-x {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+}
+
+.web-embed-social-x > * {
+  max-width: 100%;
+}
+
 .web-embed-placeholder {
   display: grid;
   align-content: center;
