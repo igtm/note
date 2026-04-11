@@ -117,6 +117,11 @@ type ItemOrigin = {
   y: number
 }
 
+type HistorySnapshot = {
+  items: CanvasItem[]
+  selectedIds: string[]
+}
+
 type DrawInteraction = {
   kind: 'draw'
   pointerId: number
@@ -237,6 +242,7 @@ const createId = () => `note-${Date.now().toString(36)}-${Math.random().toString
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 const unique = (values: string[]) => [...new Set(values)]
+const HISTORY_LIMIT = 100
 
 const isShapeTool = (value: Tool): value is ShapeTool =>
   ['rect', 'ellipse', 'diamond', 'slide', 'webEmbed', 'line', 'arrow'].includes(value)
@@ -705,6 +711,8 @@ function App() {
   const [exportPreviewPending, setExportPreviewPending] = createSignal(false)
   const [currentNoteFileHandle, setCurrentNoteFileHandle] = createSignal<NoteFileHandle | null>(null)
   const [currentNoteFileName, setCurrentNoteFileName] = createSignal<string | null>(null)
+  const [undoStack, setUndoStack] = createSignal<HistorySnapshot[]>([])
+  const [redoStack, setRedoStack] = createSignal<HistorySnapshot[]>([])
   let appMenuRef!: HTMLDivElement
   let stageRef!: HTMLDivElement
   let imagePickerRef!: HTMLInputElement
@@ -722,6 +730,7 @@ function App() {
   let documentFontsReadyPromise: Promise<void> | null = null
   let inMemoryClipboard: CanvasItem[] | null = null
   let clipboardPasteCount = 0
+  let pendingHistorySnapshot: HistorySnapshot | null = null
   const itemContentRefs = new Map<string, HTMLDivElement>()
 
   const queueExportRender = async <T,>(job: () => Promise<T>) => {
@@ -888,6 +897,8 @@ function App() {
   const canSaveToCurrentFile = createMemo(() => currentNoteFileHandle() !== null)
   const canExportSelection = createMemo(() => selectedCount() > 0)
   const canStartSlideshow = createMemo(() => presentationSlides().length > 0)
+  const canUndo = createMemo(() => undoStack().length > 0)
+  const canRedo = createMemo(() => redoStack().length > 0)
   const exportTargetItems = createMemo(() =>
     exportOnlySelected() && canExportSelection() ? selectedItems() : items(),
   )
@@ -1041,6 +1052,92 @@ function App() {
     if (laserPointerEnabled()) setLaserPointerEnabled(false)
   })
 
+  const cloneCanvasItem = (item: CanvasItem): CanvasItem => JSON.parse(JSON.stringify(item)) as CanvasItem
+  const cloneCanvasItems = (sourceItems: CanvasItem[]) => sourceItems.map(cloneCanvasItem)
+  const historyItemsSignature = (sourceItems: CanvasItem[]) => JSON.stringify(sourceItems)
+  const takeHistorySnapshot = (): HistorySnapshot => ({
+    items: cloneCanvasItems(items()),
+    selectedIds: [...selectedIds()],
+  })
+
+  const pushUndoSnapshot = (snapshot: HistorySnapshot) => {
+    setUndoStack((current) => [...current.slice(Math.max(0, current.length - HISTORY_LIMIT + 1)), snapshot])
+    setRedoStack([])
+  }
+
+  const beginHistoryAction = () => {
+    pendingHistorySnapshot ??= takeHistorySnapshot()
+  }
+
+  const commitHistoryAction = () => {
+    const snapshot = pendingHistorySnapshot
+    pendingHistorySnapshot = null
+    if (!snapshot || historyItemsSignature(snapshot.items) === historyItemsSignature(items())) return
+    pushUndoSnapshot(snapshot)
+  }
+
+  const applyHistoryMutation = (mutation: () => void) => {
+    const ownsHistoryAction = pendingHistorySnapshot === null
+    if (ownsHistoryAction) beginHistoryAction()
+    mutation()
+    if (ownsHistoryAction) commitHistoryAction()
+  }
+
+  const clearHistory = () => {
+    pendingHistorySnapshot = null
+    setUndoStack([])
+    setRedoStack([])
+  }
+
+  const restoreHistorySnapshot = (snapshot: HistorySnapshot) => {
+    const nextItems = cloneCanvasItems(snapshot.items)
+    const itemIds = new Set(nextItems.map((item) => item.id))
+    setItems(nextItems)
+    setSelectedIds(snapshot.selectedIds.filter((id) => itemIds.has(id)))
+    setEditingId(null)
+    setInteraction(null)
+    setErasePreviewIds([])
+  }
+
+  const undoHistory = () => {
+    if (editingId()) setEditingId(null)
+    if (pendingHistorySnapshot) commitHistoryAction()
+
+    const past = undoStack()
+    const target = past[past.length - 1]
+    if (!target) return
+
+    setUndoStack(past.slice(0, -1))
+    setRedoStack((current) => [...current, takeHistorySnapshot()])
+    restoreHistorySnapshot(target)
+  }
+
+  const redoHistory = () => {
+    if (editingId()) setEditingId(null)
+    if (pendingHistorySnapshot) commitHistoryAction()
+
+    const future = redoStack()
+    const target = future[future.length - 1]
+    if (!target) return
+
+    setRedoStack(future.slice(0, -1))
+    setUndoStack((current) => [...current.slice(Math.max(0, current.length - HISTORY_LIMIT + 1)), takeHistorySnapshot()])
+    restoreHistorySnapshot(target)
+  }
+
+  const startTextEdit = (id: string) => {
+    if (editingId() === id) return
+    if (editingId()) commitHistoryAction()
+    beginHistoryAction()
+    setEditingId(id)
+  }
+
+  const finishTextEdit = () => {
+    const hadEditing = editingId() !== null
+    setEditingId(null)
+    if (hadEditing) commitHistoryAction()
+  }
+
   const updateItem = (id: string, patch: Partial<CanvasItem>) => {
     setItems((current) =>
       current.map((item): CanvasItem => (item.id === id ? ({ ...item, ...patch } as CanvasItem) : item)),
@@ -1049,16 +1146,16 @@ function App() {
 
   const updateSelectedItemsWhere = (predicate: (item: CanvasItem) => boolean, patch: Partial<CanvasItem>) => {
     const ids = new Set(selectedIds())
-    setItems((current) =>
-      current.map((item): CanvasItem =>
-        ids.has(item.id) && predicate(item) ? ({ ...item, ...patch } as CanvasItem) : item,
+    applyHistoryMutation(() =>
+      setItems((current) =>
+        current.map((item): CanvasItem =>
+          ids.has(item.id) && predicate(item) ? ({ ...item, ...patch } as CanvasItem) : item,
+        ),
       ),
     )
   }
 
   const updateSelectedItems = (patch: Partial<CanvasItem>) => updateSelectedItemsWhere(() => true, patch)
-
-  const cloneCanvasItem = (item: CanvasItem): CanvasItem => JSON.parse(JSON.stringify(item)) as CanvasItem
 
   const placeImportedItems = (sourceItems: CanvasItem[], index: number) => {
     const center = viewportCenterWorld()
@@ -1118,8 +1215,11 @@ function App() {
     if (!ids.length) return
 
     const eraseSet = new Set(ids)
-    setItems((current) => current.filter((item) => !eraseSet.has(item.id)))
-    setErasePreviewIds([])
+    applyHistoryMutation(() => {
+      setItems((current) => current.filter((item) => !eraseSet.has(item.id)))
+      setErasePreviewIds([])
+      setSelectedIds((current) => current.filter((id) => !eraseSet.has(id)))
+    })
   }
 
   const selectItemsInBox = (box: SelectionBox, previousIds: string[]) => {
@@ -1145,6 +1245,7 @@ function App() {
     const dragIds = unique(ids)
     const dragSet = new Set(dragIds)
 
+    beginHistoryAction()
     setInteraction({
       kind: 'drag',
       pointerId: event.pointerId,
@@ -1228,6 +1329,7 @@ function App() {
   const currentNotebook = (): SavedNotebook => ({ items: items(), view: view() })
 
   const applyLoadedNotebook = (payload: SavedNotebook, handle: NoteFileHandle | null, name: string | null) => {
+    clearHistory()
     setSlideshowIndex(null)
     setSlideshowRestoreView(null)
     setItems(payload.items)
@@ -1525,10 +1627,12 @@ function App() {
 
   const placeTextItem = (point: Point) => {
     const item = createTextItem(point)
-    setItems((current) => [...current, item])
-    setSelectedIds([item.id])
-    setTool('selection')
-    setEditingId(item.id)
+    applyHistoryMutation(() => {
+      setItems((current) => [...current, item])
+      setSelectedIds([item.id])
+      setTool('selection')
+    })
+    startTextEdit(item.id)
   }
 
   const pasteImageFiles = async (files: File[]) => {
@@ -1544,10 +1648,12 @@ function App() {
       nextItems.push(await createImageItemFromFile(file, index))
     }
 
-    setItems((current) => [...current, ...nextItems])
-    setSelectedIds(nextItems.map((item) => item.id))
-    setEditingId(null)
-    setTool('selection')
+    applyHistoryMutation(() => {
+      setItems((current) => [...current, ...nextItems])
+      setSelectedIds(nextItems.map((item) => item.id))
+      setEditingId(null)
+      setTool('selection')
+    })
   }
 
   const copySelectedItems = (clipboardData?: DataTransfer | null) => {
@@ -1572,10 +1678,12 @@ function App() {
     clipboardPasteCount += 1
     const offset = 24 * clipboardPasteCount
     const nextItems = duplicateClipboardItems(sourceItems, offset)
-    setItems((current) => [...current, ...nextItems])
-    setSelectedIds(nextItems.map((item) => item.id))
-    setEditingId(null)
-    setTool('selection')
+    applyHistoryMutation(() => {
+      setItems((current) => [...current, ...nextItems])
+      setSelectedIds(nextItems.map((item) => item.id))
+      setEditingId(null)
+      setTool('selection')
+    })
     return true
   }
 
@@ -1658,7 +1766,7 @@ function App() {
     closeTemplateModal()
     closeExportModal()
     setAppMenuOpen(false)
-    setEditingId(null)
+    finishTextEdit()
     setInteraction(null)
     setErasePreviewIds([])
     setSelectedIds([])
@@ -1712,6 +1820,7 @@ function App() {
     const point = screenToWorld(event.clientX, event.clientY)
     const style = createDefaultItemStyle('path')
     const item = createPathItemFromPoints(createId(), [point], style)
+    beginHistoryAction()
     setItems((current) => [...current, item])
     setSelectedIds([item.id])
     setInteraction({
@@ -1748,26 +1857,31 @@ function App() {
   const deleteSelected = () => {
     const ids = new Set(selectedIds())
     if (!ids.size) return
-    setItems((current) => current.filter((item) => !ids.has(item.id)))
-    setSelectedIds([])
-    setEditingId(null)
-    setErasePreviewIds([])
+    applyHistoryMutation(() => {
+      setItems((current) => current.filter((item) => !ids.has(item.id)))
+      setSelectedIds([])
+      setEditingId(null)
+      setErasePreviewIds([])
+    })
   }
 
   const duplicateSelected = () => {
     const selection = selectedItems()
     if (!selection.length) return
 
-    const duplicated = selection.map((item) => ({
-      ...item,
-      id: createId(),
-      x: item.x + 32,
-      y: item.y + 32,
-    }))
+    const duplicated = selection.map((item) => {
+      const cloned = cloneCanvasItem(item)
+      cloned.id = createId()
+      cloned.x += 32
+      cloned.y += 32
+      return cloned
+    })
 
-    setItems((current) => [...current, ...duplicated])
-    setSelectedIds(duplicated.map((item) => item.id))
-    setEditingId(null)
+    applyHistoryMutation(() => {
+      setItems((current) => [...current, ...duplicated])
+      setSelectedIds(duplicated.map((item) => item.id))
+      setEditingId(null)
+    })
   }
 
   const resetView = () => setView(defaultView())
@@ -1775,30 +1889,31 @@ function App() {
   const clearBoard = () => {
     setAppMenuOpen(false)
     if (!confirm('このノートを初期状態に戻しますか？')) return
-    setItems([])
-    setView(defaultView())
-    setSelectedIds([])
-    setEditingId(null)
-    setErasePreviewIds([])
-    setInteraction(null)
-    setTool('selection')
+    applyHistoryMutation(() => {
+      setItems([])
+      setView(defaultView())
+      setSelectedIds([])
+      setEditingId(null)
+      setErasePreviewIds([])
+      setInteraction(null)
+      setTool('selection')
+    })
   }
 
   const handleStagePointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     if (slideshowActive()) return
     if (event.button !== 0 || isEditableTarget(event.target)) return
     setErasePreviewIds([])
+    finishTextEdit()
 
     const currentTool = tool()
 
     if (currentTool === 'pencil') {
-      setEditingId(null)
       startDraw(event)
       return
     }
 
     if (currentTool === 'eraser') {
-      setEditingId(null)
       setSelectedIds([])
       startErase(event)
       return
@@ -1810,7 +1925,6 @@ function App() {
     }
 
     if (isShapeTool(currentTool)) {
-      setEditingId(null)
       startShapeCreation(event, currentTool)
       return
     }
@@ -1825,12 +1939,10 @@ function App() {
     const bounds = selectedBounds()
 
     if (!additive && bounds && boxContainsPoint(bounds, startWorld)) {
-      setEditingId(null)
       startSelectedItemsDrag(event, selectedIds(), startWorld)
       return
     }
 
-    setEditingId(null)
     if (!additive) setSelectedIds([])
     setInteraction({
       kind: 'selectArea',
@@ -1852,7 +1964,7 @@ function App() {
     const currentTool = tool()
     if (currentTool === 'pan') {
       event.stopPropagation()
-      setEditingId(null)
+      finishTextEdit()
       startPan(event)
       return
     }
@@ -1860,6 +1972,7 @@ function App() {
     if (currentTool !== 'selection') return
 
     event.stopPropagation()
+    finishTextEdit()
     const additive = event.shiftKey || event.metaKey || event.ctrlKey
     const currentIds = selectedIds()
     const nextIds = currentIds.includes(item.id)
@@ -1870,7 +1983,6 @@ function App() {
     const dragIds = unique(nextIds)
 
     setSelectedIds(dragIds)
-    setEditingId((current) => (current === item.id ? current : null))
     startSelectedItemsDrag(event, dragIds, screenToWorld(event.clientX, event.clientY))
   }
 
@@ -1882,6 +1994,7 @@ function App() {
     if (isStrokeCanvasItem(item)) return
     event.stopPropagation()
     setSelectedIds([item.id])
+    beginHistoryAction()
     setInteraction({
       kind: 'resize',
       pointerId: event.pointerId,
@@ -1967,10 +2080,12 @@ function App() {
     if (active.kind === 'createShape') {
       const item = createShapeItem(active.type, active.startWorld, active.currentWorld)
       if (item) {
-        setItems((current) => [...current, item])
-        setSelectedIds([item.id])
-        setTool('selection')
-        setEditingId(null)
+        applyHistoryMutation(() => {
+          setItems((current) => [...current, item])
+          setSelectedIds([item.id])
+          setTool('selection')
+          setEditingId(null)
+        })
       }
       setInteraction(null)
       return
@@ -1984,6 +2099,7 @@ function App() {
     }
 
     if (active.kind === 'erase') commitErasePreview()
+    if (active.kind === 'draw' || active.kind === 'drag' || active.kind === 'resize') commitHistoryAction()
 
     setInteraction(null)
   }
@@ -2131,12 +2247,28 @@ function App() {
     }
 
     if (isEditableTarget(event.target)) {
-      if (event.key === 'Escape') setEditingId(null)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        finishTextEdit()
+      }
       return
     }
 
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
       const key = event.key.toLowerCase()
+
+      if (key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) redoHistory()
+        else undoHistory()
+        return
+      }
+
+      if (key === 'y') {
+        event.preventDefault()
+        redoHistory()
+        return
+      }
 
       if (key === 'o') {
         event.preventDefault()
@@ -2157,7 +2289,7 @@ function App() {
       if (key === 'a') {
         event.preventDefault()
         setSelectedIds(items().map((item) => item.id))
-        setEditingId(null)
+        finishTextEdit()
         setTool('selection')
         return
       }
@@ -2166,7 +2298,7 @@ function App() {
     if (event.key === 'Escape') {
       setTool('selection')
       setSelectedIds([])
-      setEditingId(null)
+      finishTextEdit()
       setErasePreviewIds([])
       setInteraction(null)
       return
@@ -2290,6 +2422,32 @@ function App() {
           </div>
 
           <div class="toolbar-actions">
+            <button
+              class="action-button"
+              type="button"
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo"
+              onClick={undoHistory}
+              disabled={!canUndo()}
+            >
+              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 7 5 11l4 4" />
+                <path d="M5 11h8.5a5 5 0 0 1 0 10H11" />
+              </svg>
+            </button>
+            <button
+              class="action-button"
+              type="button"
+              title="Redo (Ctrl+Shift+Z / Ctrl+Y)"
+              aria-label="Redo"
+              onClick={redoHistory}
+              disabled={!canRedo()}
+            >
+              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m15 7 4 4-4 4" />
+                <path d="M19 11h-8.5a5 5 0 0 0 0 10H13" />
+              </svg>
+            </button>
             <button
               class="action-button"
               type="button"
@@ -2927,7 +3085,7 @@ function App() {
                     if (isStrokeCanvasItem(item()) || isImageItem(item()) || isSlideItem(item()) || isWebEmbedItem(item())) return
                     event.stopPropagation()
                     setSelectedIds([itemId])
-                    setEditingId(itemId)
+                    startTextEdit(itemId)
                   }}
                 >
                   <Show when={item().type === 'diamond'}>
@@ -2966,7 +3124,7 @@ function App() {
                                       }}
                                       onBlur={() => {
                                         scheduleFitItemHeight(itemId)
-                                        setEditingId((current) => (current === itemId ? null : current))
+                                        if (editingId() === itemId) finishTextEdit()
                                       }}
                                     />
                                   </div>
@@ -3003,6 +3161,8 @@ function App() {
                                           placeholder="Paste a URL…"
                                           onPointerDown={(event) => event.stopPropagation()}
                                           onClick={(event) => event.stopPropagation()}
+                                          onFocus={beginHistoryAction}
+                                          onBlur={commitHistoryAction}
                                           onInput={(event) => updateWebEmbedUrl(webEmbedItem().id, event.currentTarget.value)}
                                         />
                                       </Show>

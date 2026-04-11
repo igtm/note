@@ -52,6 +52,8 @@ npx skills add https://github.com/igtm/note
 - `O`: 丸
 - `D`: ダイヤ形
 - `Tab` / `Shift + Tab`: 編集中のリストをインデント/アウトデント
+- `Ctrl`/`Cmd` + `Z`: 元に戻す
+- `Ctrl`/`Cmd` + `Shift` + `Z`、または `Ctrl`/`Cmd` + `Y`: やり直す
 - `Delete` / `Backspace`: 選択中の要素を削除
 - `Ctrl`/`Cmd` + `D`: 複製
 - `+` / `-`: 拡大縮小
