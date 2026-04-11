@@ -1,6 +1,8 @@
 import type { JSONContent } from '@tiptap/core'
 import { getUrlDisplayLabel } from './links'
 import {
+  DEFAULT_SLIDE_FILL,
+  DEFAULT_SLIDE_STROKE,
   isStrokeCanvasItem,
   isImageItem,
   isSlideItem,
@@ -29,6 +31,15 @@ type ExportTheme = {
   noteInset: string
   noteRule: string
   noteSheen: string
+  slideFill: string
+  slideStroke: string
+  slideSheenStart: string
+  slideSheenEnd: string
+  slideInnerBorder: string
+  slideInset: string
+  slideBadgeBg: string
+  slideBadgeBorder: string
+  slideBadgeInk: string
   taskAccent: string
   textStrike: string
   hand: string
@@ -73,6 +84,15 @@ const EXPORT_THEME: Record<ExportThemeName, ExportTheme> = {
     noteInset: 'rgba(255, 255, 255, 0.08)',
     noteRule: 'rgba(91, 72, 38, 0.12)',
     noteSheen: 'rgba(255, 255, 255, 0.35)',
+    slideFill: DEFAULT_SLIDE_FILL,
+    slideStroke: DEFAULT_SLIDE_STROKE,
+    slideSheenStart: 'rgba(255, 255, 255, 0.74)',
+    slideSheenEnd: 'rgba(255, 255, 255, 0.06)',
+    slideInnerBorder: 'rgba(91, 72, 38, 0.22)',
+    slideInset: 'rgba(255, 255, 255, 0.45)',
+    slideBadgeBg: 'rgba(255, 255, 255, 0.72)',
+    slideBadgeBorder: 'rgba(91, 72, 38, 0.18)',
+    slideBadgeInk: 'rgba(91, 72, 38, 0.76)',
     taskAccent: '#8f6b2b',
     textStrike: 'rgba(69, 55, 37, 0.58)',
     hand: "'Klee One', 'Hiragino Maru Gothic ProN', 'Yu Gothic', 'Comic Sans MS', cursive",
@@ -87,6 +107,15 @@ const EXPORT_THEME: Record<ExportThemeName, ExportTheme> = {
     noteInset: 'rgba(255, 255, 255, 0.04)',
     noteRule: 'rgba(176, 138, 83, 0.18)',
     noteSheen: 'rgba(255, 255, 255, 0.08)',
+    slideFill: '#211a14',
+    slideStroke: '#f4eadb',
+    slideSheenStart: 'rgba(255, 255, 255, 0.08)',
+    slideSheenEnd: 'rgba(255, 255, 255, 0.02)',
+    slideInnerBorder: 'rgba(244, 234, 219, 0.2)',
+    slideInset: 'rgba(255, 255, 255, 0.08)',
+    slideBadgeBg: 'rgba(244, 234, 219, 0.12)',
+    slideBadgeBorder: 'rgba(244, 234, 219, 0.18)',
+    slideBadgeInk: 'rgba(244, 234, 219, 0.84)',
     taskAccent: '#d1a95c',
     textStrike: 'rgba(215, 199, 181, 0.58)',
     hand: "'Klee One', 'Hiragino Maru Gothic ProN', 'Yu Gothic', 'Comic Sans MS', cursive",
@@ -141,6 +170,12 @@ const escapeXml = escapeHtml
 
 const resolveThemeAwareStroke = (stroke: string, themeName: ExportThemeName) =>
   stroke === LIGHT_INK_STROKE ? EXPORT_THEME[themeName].ink : stroke
+
+const resolveThemeAwareItemFill = (item: CanvasItem, theme: ExportTheme) =>
+  isSlideItem(item) && item.color === DEFAULT_SLIDE_FILL ? theme.slideFill : item.color
+
+const resolveThemeAwareItemStroke = (item: CanvasItem, themeName: ExportThemeName, theme: ExportTheme) =>
+  isSlideItem(item) && item.stroke === DEFAULT_SLIDE_STROKE ? theme.slideStroke : resolveThemeAwareStroke(item.stroke, themeName)
 
 export const getItemBounds = (items: CanvasItem[]): Bounds => {
   if (!items.length) return { x: 0, y: 0, w: 1, h: 1 }
@@ -252,13 +287,14 @@ const renderPath = (item: StrokeCanvasItem, themeName: ExportThemeName) => {
 }
 
 const renderCanvasItem = (item: CanvasItem, bounds: Bounds, padding: number, themeName: ExportThemeName, theme: ExportTheme) => {
-  const resolvedStroke = resolveThemeAwareStroke(item.stroke, themeName)
+  const resolvedFill = resolveThemeAwareItemFill(item, theme)
+  const resolvedStroke = resolveThemeAwareItemStroke(item, themeName, theme)
   const style = [
     `left:${formatNumber(item.x - bounds.x + padding)}px`,
     `top:${formatNumber(item.y - bounds.y + padding)}px`,
     `width:${formatNumber(item.w)}px`,
     `height:${formatNumber(item.h)}px`,
-    `--item-fill:${item.color}`,
+    `--item-fill:${resolvedFill}`,
     `--item-stroke:${resolvedStroke}`,
     `--item-stroke-width:${formatNumber(strokeWidthPx(item.strokeWidth))}px`,
     `--item-stroke-style:${item.strokeStyle}`,
@@ -338,9 +374,9 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     border-radius: 34px;
     box-shadow:
       0 24px 60px rgba(0, 0, 0, 0.18),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+      inset 0 0 0 1px ${theme.slideInset};
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.06)),
+      linear-gradient(180deg, ${theme.slideSheenStart}, ${theme.slideSheenEnd}),
       var(--item-fill);
   }
   .export-root .item-webEmbed .item-content {
@@ -424,7 +460,7 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     content: '';
     position: absolute;
     inset: 28px;
-    border: 1px dashed rgba(91, 72, 38, 0.22);
+    border: 1px dashed ${theme.slideInnerBorder};
     border-radius: 24px;
   }
   .export-root .slide-frame-badge {
@@ -435,10 +471,10 @@ const exportCss = (theme: ExportTheme, includeBackground: boolean) => `
     align-items: center;
     min-height: 28px;
     padding: 0 12px;
-    border: 1px solid rgba(91, 72, 38, 0.18);
+    border: 1px solid ${theme.slideBadgeBorder};
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.72);
-    color: rgba(91, 72, 38, 0.76);
+    background: ${theme.slideBadgeBg};
+    color: ${theme.slideBadgeInk};
     font-family: ${theme.mono};
     font-size: 12px;
     letter-spacing: 0.04em;

@@ -6,7 +6,7 @@ import {
   injectPngTextChunk,
   readPngTextChunk,
 } from './exportImage'
-import { createEmptyContent, type CanvasItem } from './notebook'
+import { DEFAULT_SLIDE_FILL, DEFAULT_SLIDE_STROKE, createEmptyContent, createDefaultItemStyle, type CanvasItem } from './notebook'
 
 const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2kVwAAAAASUVORK5CYII='
@@ -46,5 +46,29 @@ describe('exportImage', () => {
 
     expect(scene?.svg).toContain(`id="${EXPORT_SVG_METADATA_ID}"`)
     expect(scene?.svg).toContain('encoded-payload')
+  })
+
+  it('renders default slide colors with the dark export palette', () => {
+    const item: CanvasItem = {
+      id: 'slide-1',
+      type: 'slide',
+      x: 0,
+      y: 0,
+      w: 1280,
+      h: 720,
+      ...createDefaultItemStyle('slide'),
+    }
+
+    const scene = buildExportSvg({
+      items: [item],
+      onlySelected: false,
+      includeBackground: true,
+      darkMode: true,
+    })
+
+    expect(scene?.html).toContain('--item-fill:#211a14')
+    expect(scene?.html).toContain('--item-stroke:#f4eadb')
+    expect(scene?.html).not.toContain(`--item-fill:${DEFAULT_SLIDE_FILL}`)
+    expect(scene?.html).not.toContain(`--item-stroke:${DEFAULT_SLIDE_STROKE}`)
   })
 })

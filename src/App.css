@@ -1140,9 +1140,9 @@
   border-radius: 34px;
   box-shadow:
     0 24px 60px rgba(0, 0, 0, 0.18),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+    inset 0 0 0 1px var(--slide-inset);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.08)),
+    linear-gradient(180deg, var(--slide-sheen-start), var(--slide-sheen-end)),
     var(--item-fill);
 }
 
@@ -1190,7 +1190,7 @@
   content: '';
   position: absolute;
   inset: 28px;
-  border: 1px dashed rgba(91, 72, 38, 0.24);
+  border: 1px dashed var(--slide-inner-border);
   border-radius: 24px;
 }
 
@@ -1203,10 +1203,10 @@
   align-items: center;
   min-height: 28px;
   padding: 0 12px;
-  border: 1px solid rgba(91, 72, 38, 0.18);
+  border: 1px solid var(--slide-badge-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: rgba(91, 72, 38, 0.82);
+  background: var(--slide-badge-bg);
+  color: var(--slide-badge-ink);
   font-family: var(--mono);
   font-size: 12px;
   letter-spacing: 0.04em;

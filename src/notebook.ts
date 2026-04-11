@@ -19,6 +19,9 @@ export type FontFamily = 'hand' | 'sans' | 'mono'
 export type FontSize = 'sm' | 'md' | 'lg'
 export type TextAlign = 'left' | 'center' | 'right'
 
+export const DEFAULT_SLIDE_FILL = '#fffdf8'
+export const DEFAULT_SLIDE_STROKE = '#5b4826'
+
 export type PathPoint = {
   x: number
   y: number
@@ -202,8 +205,8 @@ export const createDefaultItemStyle = (type: ItemType): ItemStyle => {
 
   if (type === 'slide') {
     return {
-      color: '#fffdf8',
-      stroke: '#5b4826',
+      color: DEFAULT_SLIDE_FILL,
+      stroke: DEFAULT_SLIDE_STROKE,
       strokeWidth: 'medium',
       strokeStyle: 'solid',
       fontFamily: 'sans',

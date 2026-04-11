@@ -24,6 +24,8 @@ import {
 import { RichTextItem } from './RichTextItem'
 import { WebEmbedContent } from './WebEmbedContent'
 import {
+  DEFAULT_SLIDE_FILL,
+  DEFAULT_SLIDE_STROKE,
   createDefaultItemStyle,
   createEmptyContent,
   isStrokeCanvasItem,
@@ -269,8 +271,13 @@ const strokeDasharray = (value: StrokeStyle) =>
 
 const LIGHT_INK_STROKE = '#1f1f1f'
 const THEME_INK_STROKE = 'var(--ink-stroke)'
+const THEME_SLIDE_FILL = 'var(--slide-fill)'
+const THEME_SLIDE_STROKE = 'var(--slide-stroke)'
 
 const resolveThemeAwareStroke = (stroke: string) => (stroke === LIGHT_INK_STROKE ? THEME_INK_STROKE : stroke)
+const resolveItemFill = (item: CanvasItem) => (item.type === 'slide' && item.color === DEFAULT_SLIDE_FILL ? THEME_SLIDE_FILL : item.color)
+const resolveItemStroke = (item: CanvasItem) =>
+  item.type === 'slide' && item.stroke === DEFAULT_SLIDE_STROKE ? THEME_SLIDE_STROKE : resolveThemeAwareStroke(item.stroke)
 const isLinearTool = (value: ShapeTool): value is LineCanvasItem['type'] | ArrowCanvasItem['type'] =>
   value === 'line' || value === 'arrow'
 const MIN_LINEAR_PREVIEW_LENGTH = 1
@@ -2201,8 +2208,8 @@ function App() {
       `width: ${item.w}px`,
       `min-height: ${item.h}px`,
       `height: ${item.h}px`,
-      `--item-fill: ${item.color}`,
-      `--item-stroke: ${resolveThemeAwareStroke(item.stroke)}`,
+      `--item-fill: ${resolveItemFill(item)}`,
+      `--item-stroke: ${resolveItemStroke(item)}`,
       `--item-stroke-width: ${strokeWidthPx(item.strokeWidth)}px`,
       `--item-stroke-style: ${item.strokeStyle}`,
       `--item-stroke-dash: ${strokeDasharray(item.strokeStyle)}`,
